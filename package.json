@@ -1,8 +1,8 @@
-{
+﻿{
   "name": "wf-switch-plus",
   "displayName": "WF 增强",
   "description": "WF 一键换号的伴生增强插件：保留原版插件独立安装，提供持续对话、Token 统计、自检和快捷控制台。",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "xy",
   "homepage": "https://anjaymi.github.io/wf-switch-plus/",
   "repository": {
@@ -173,3 +173,4 @@
     }
   }
 }
+

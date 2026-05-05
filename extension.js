@@ -137,6 +137,42 @@ async function selfCheck() {
   return lines;
 }
 
+function promptInstallContinueSupport(context) {
+  const versionKey = 'continueSetupPromptVersion';
+  const mutedKey = 'continueSetupPromptMuted';
+  if (context.globalState.get(mutedKey, false)) return;
+  if (context.globalState.get(versionKey, '') === pkg.version) return;
+  setTimeout(async () => {
+    try {
+      const pick = await vscode.window.showInformationMessage(
+        'WF 增强建议安装持续对话规则与本地 HTTP，用于回合结束弹窗、附件上传和自动回复。',
+        '安装规则与 HTTP',
+        '打开控制台',
+        '稍后',
+        '不再提示'
+      );
+      if (pick === '安装规则与 HTTP') {
+        const r = await installContinueSupport(context);
+        if (r.ok) {
+          await context.globalState.update(versionKey, pkg.version);
+          vscode.window.showInformationMessage(`已安装持续对话支持，本地 HTTP 端口: ${r.port}`);
+        } else {
+          vscode.window.showErrorMessage(`安装持续对话支持失败: ${r.error}`);
+        }
+      } else if (pick === '打开控制台') {
+        await context.globalState.update(versionKey, pkg.version);
+        try { await vscode.commands.executeCommand('wfSwitchPlus.panel.focus'); } catch { await vscode.commands.executeCommand('workbench.view.extension.wfSwitchPlusView'); }
+      } else if (pick === '不再提示') {
+        await context.globalState.update(mutedKey, true);
+      } else if (pick === '稍后') {
+        await context.globalState.update(versionKey, pkg.version);
+      }
+    } catch (e) {
+      console.warn('[wfSwitchPlus] continue setup prompt failed:', e && e.message);
+    }
+  }, 1200);
+}
+
 let bridgeStatusCache = { installed: false, injected: false };
 function getPanelHtml() {
   const stats = readTokenUsageStatsSync();
@@ -433,8 +469,8 @@ function activate(context) {
   }, 5000);
   context.subscriptions.push({ dispose: () => clearInterval(liveTimer) });
   installBuiltinContinuePs1().catch(() => {});
-  configureWfContinueGlobalRules().catch(() => {});
   try { startContinueHttpServer(context); } catch (e) { console.warn('[wfSwitchPlus] continue http init failed:', e.message); }
+  promptInstallContinueSupport(context);
   // 自动注入伴生桥：原版在但桥版本不一致或缺失时静默更新
   originalBridge.ensureBridgeAuto()
     .then(r => { if (r && r.ok && !r.alreadyInjected && !r.skipped) vscode.window.setStatusBarMessage('已为原版插件注入伴生桥，重载后启用真实账号同步', 4000); })
