@@ -15,6 +15,7 @@ let continueHttpServer = null;
 let activeContinueRequest = null;
 let continueHttpPort = null;
 let manualContinuePanel = null;
+let continueRegistryTimer = null;
 let getInstanceId = () => 'unknown';
 
 const WF_CONTINUE_DIR = path.join(os.homedir(), 'AppData', 'Local', 'wf-switch-continue');

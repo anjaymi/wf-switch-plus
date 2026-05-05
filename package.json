@@ -2,8 +2,9 @@
   "name": "wf-switch-plus",
   "displayName": "WF 增强",
   "description": "WF 一键换号的伴生增强插件：保留原版插件独立安装，提供持续对话、Token 统计、自检和快捷控制台。",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "xy",
+  "license": "GPL-3.0-only",
   "homepage": "https://anjaymi.github.io/wf-switch-plus/",
   "repository": {
     "type": "git",
@@ -48,6 +49,7 @@
       { "command": "wfSwitchPlus.hack", "title": "WF 增强: 应用 loginWithAuthToken 补丁" },
       { "command": "wfSwitchPlus.continueDialog", "title": "WF 增强: 继续对话调试/上传附件" },
       { "command": "wfSwitchPlus.installContinueSupport", "title": "WF 增强: 安装持续对话规则与本地HTTP" },
+      { "command": "wfSwitchPlus.continueHealthCheck", "title": "WF 增强: 持续对话质检/自动修复" },
       { "command": "wfSwitchPlus.configureContinueRules", "title": "WF 增强: 配置继续对话全局规则" },
       { "command": "wfSwitchPlus.copyContinueScriptPath", "title": "WF 增强: 复制继续对话脚本路径" },
       { "command": "wfSwitchPlus.copyClaudeContextMcpConfig", "title": "WF 增强: 复制 Claude Context MCP 配置模板" },

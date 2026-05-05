@@ -10,6 +10,7 @@ const { readSharedState, writeSharedState, findBundleAccount } = require('./src/
 const { sendBridgeRequest } = require('./src/state/bridgeRequest');
 const { pickBestAccountByDaily } = require('./src/domain/accountSelector');
 const { exportAllTokens } = require('./src/domain/tokenExporter');
+const { checkContinueHealth, formatContinueHealthReport } = require('./src/continueHealth');
 const { ACCOUNTS, PLUS_PANEL } = require('./src/shared/messageTypes');
 
 let accountsOverviewPanel = null;
@@ -173,6 +174,61 @@ function promptInstallContinueSupport(context) {
   }, 1200);
 }
 
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function runContinueHealthCheck(context, options = {}) {
+  try { startContinueHttpServer(context); } catch (e) { console.warn('[wfSwitchPlus] continue http init failed:', e && e.message); }
+  await wait(300);
+  let health = await checkContinueHealth();
+  if (health.ok) {
+    if (options.interactive !== false) {
+      const pick = await vscode.window.showInformationMessage('持续对话质检通过', '复制报告');
+      if (pick === '复制报告') await vscode.env.clipboard.writeText(formatContinueHealthReport(health));
+    }
+    return health;
+  }
+  const report = formatContinueHealthReport(health);
+  if (options.autoRepair) {
+    const r = await installContinueSupport(context);
+    await wait(500);
+    health = await checkContinueHealth();
+    if (options.interactive !== false) {
+      if (health.ok) vscode.window.showInformationMessage(`持续对话已自动修复，本地 HTTP 端口: ${r.port || health.port}`);
+      else vscode.window.showWarningMessage('自动修复后仍有异常：' + health.issues.join('；'));
+    }
+    return Object.assign(health, { repairResult: r });
+  }
+  if (options.interactive === false) return health;
+  const pick = await vscode.window.showWarningMessage('持续对话质检发现异常：' + health.issues.join('；'), '自动修复', '复制报告', '打开控制台');
+  if (pick === '自动修复') {
+    const r = await installContinueSupport(context);
+    await wait(500);
+    health = await checkContinueHealth();
+    if (health.ok) vscode.window.showInformationMessage(`持续对话已自动修复，本地 HTTP 端口: ${r.port || health.port}`);
+    else vscode.window.showWarningMessage('自动修复后仍有异常：' + health.issues.join('；'));
+  } else if (pick === '复制报告') {
+    await vscode.env.clipboard.writeText(report);
+    vscode.window.showInformationMessage('已复制持续对话质检报告');
+  } else if (pick === '打开控制台') {
+    try { await vscode.commands.executeCommand('wfSwitchPlus.panel.focus'); } catch { await vscode.commands.executeCommand('workbench.view.extension.wfSwitchPlusView'); }
+  }
+  return health;
+}
+
+async function promptContinueHealthIfBroken(context) {
+  const health = await runContinueHealthCheck(context, { interactive: false });
+  if (health.ok) return;
+  const now = Date.now();
+  const lastAt = Number(context.globalState.get('continueHealthPromptAt', 0) || 0);
+  if (now - lastAt < 30 * 60 * 1000) return;
+  await context.globalState.update('continueHealthPromptAt', now);
+  const pick = await vscode.window.showWarningMessage('持续对话可能已失效：' + health.issues.join('；'), '自动修复', '查看质检');
+  if (pick === '自动修复') await runContinueHealthCheck(context, { autoRepair: true, interactive: true });
+  else if (pick === '查看质检') await runContinueHealthCheck(context, { interactive: true });
+}
+
 let bridgeStatusCache = { installed: false, injected: false };
 function getPanelHtml() {
   const stats = readTokenUsageStatsSync();
@@ -243,6 +299,7 @@ class PlusPanelProvider {
       hack: 'wfSwitchPlus.hack',
       continueDialog: 'wfSwitchPlus.continueDialog',
       installContinueSupport: 'wfSwitchPlus.installContinueSupport',
+      continueHealthCheck: 'wfSwitchPlus.continueHealthCheck',
       configureContinueRules: 'wfSwitchPlus.configureContinueRules',
       copyContinueScriptPath: 'wfSwitchPlus.copyContinueScriptPath',
       copyClaudeContextMcpConfig: 'wfSwitchPlus.copyClaudeContextMcpConfig',
@@ -324,6 +381,7 @@ function activate(context) {
       if (r.ok) vscode.window.showInformationMessage(`已安装持续对话支持，本地 HTTP 端口: ${r.port}`);
       else vscode.window.showErrorMessage(`安装持续对话支持失败: ${r.error}`);
     }),
+    vscode.commands.registerCommand('wfSwitchPlus.continueHealthCheck', () => runContinueHealthCheck(context, { interactive: true })),
     vscode.commands.registerCommand('wfSwitchPlus.configureContinueRules', async () => {
       const r = await configureWfContinueGlobalRules();
       if (r.ok) vscode.window.showInformationMessage(`已配置 WF 继续对话全局规则: ${r.file}`);
@@ -471,6 +529,9 @@ function activate(context) {
   installBuiltinContinuePs1().catch(() => {});
   try { startContinueHttpServer(context); } catch (e) { console.warn('[wfSwitchPlus] continue http init failed:', e.message); }
   promptInstallContinueSupport(context);
+  setTimeout(() => promptContinueHealthIfBroken(context).catch(e => console.warn('[wfSwitchPlus] continue health prompt failed:', e && e.message)), 20000);
+  const continueHealthTimer = setInterval(() => promptContinueHealthIfBroken(context).catch(() => {}), 5 * 60 * 1000);
+  context.subscriptions.push({ dispose: () => clearInterval(continueHealthTimer) });
   // 自动注入伴生桥：原版在但桥版本不一致或缺失时静默更新
   originalBridge.ensureBridgeAuto()
     .then(r => { if (r && r.ok && !r.alreadyInjected && !r.skipped) vscode.window.setStatusBarMessage('已为原版插件注入伴生桥，重载后启用真实账号同步', 4000); })
