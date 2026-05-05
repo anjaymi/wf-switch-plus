@@ -1,0 +1,175 @@
+{
+  "name": "wf-switch-plus",
+  "displayName": "WF 增强",
+  "description": "WF 一键换号的伴生增强插件：保留原版插件独立安装，提供持续对话、Token 统计、自检和快捷控制台。",
+  "version": "0.3.2",
+  "publisher": "xy",
+  "homepage": "https://anjaymi.github.io/wf-switch-plus/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anjaymi/wf-switch-plus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/anjaymi/wf-switch-plus/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wfSwitchPlusView",
+          "title": "WF 增强",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "wfSwitchPlusView": [
+        {
+          "id": "wfSwitchPlus.panel",
+          "name": "WF 增强控制台",
+          "type": "webview",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "wfSwitchPlus.openPanel", "title": "WF 增强: 打开控制台" },
+      { "command": "wfSwitchPlus.switch", "title": "WF 增强: 调用原版一键换号" },
+      { "command": "wfSwitchPlus.activate", "title": "WF 增强: 调用原版输入激活码" },
+      { "command": "wfSwitchPlus.newInstance", "title": "WF 增强: 调用原版新建窗口" },
+      { "command": "wfSwitchPlus.openSettings", "title": "WF 增强: 调用原版服务设置" },
+      { "command": "wfSwitchPlus.hack", "title": "WF 增强: 应用 loginWithAuthToken 补丁" },
+      { "command": "wfSwitchPlus.continueDialog", "title": "WF 增强: 继续对话调试/上传附件" },
+      { "command": "wfSwitchPlus.installContinueSupport", "title": "WF 增强: 安装持续对话规则与本地HTTP" },
+      { "command": "wfSwitchPlus.configureContinueRules", "title": "WF 增强: 配置继续对话全局规则" },
+      { "command": "wfSwitchPlus.copyContinueScriptPath", "title": "WF 增强: 复制继续对话脚本路径" },
+      { "command": "wfSwitchPlus.copyClaudeContextMcpConfig", "title": "WF 增强: 复制 Claude Context MCP 配置模板" },
+      { "command": "wfSwitchPlus.showTokenUsageStats", "title": "WF 增强: 查看 Token 节约统计" },
+      { "command": "wfSwitchPlus.resetTokenUsageStats", "title": "WF 增强: 重置 Token 节约统计" },
+      { "command": "wfSwitchPlus.toggleAutoReply", "title": "WF 增强: 开关继续对话自动回复" },
+      { "command": "wfSwitchPlus.setAutoReplyPhrase", "title": "WF 增强: 设置继续对话固定回复" },
+      { "command": "wfSwitchPlus.selfCheck", "title": "WF 增强: 自检报告" },
+      { "command": "wfSwitchPlus.injectOriginalBridge", "title": "WF 增强: 向原版插件注入伴生桥" },
+      { "command": "wfSwitchPlus.removeOriginalBridge", "title": "WF 增强: 移除原版插件伴生桥" },
+      { "command": "wfSwitchPlus.openAccountsOverview", "title": "WF 增强: 打开账号总览" },
+      { "command": "wfSwitchPlus.checkOriginalUpdate", "title": "WF 增强: 检查原版插件更新" },
+      { "command": "wfSwitchPlus.focusOriginalPanel", "title": "WF 增强: 聚焦原版插件面板" },
+      { "command": "wfSwitchPlus.refreshAccountsViaBridge", "title": "WF 增强: 通过桥调用原版账号刷新" },
+      { "command": "wfSwitchPlus.smartSwitch", "title": "WF 增强: 按日额度自动切号" },
+      { "command": "wfSwitchPlus.toggleSaveToken", "title": "WF 增强: 开关节约 Token 模式" },
+      { "command": "wfSwitchPlus.toggleAutoQuotaSwitch", "title": "WF 增强: 开关无感切号" },
+      { "command": "wfSwitchPlus.setQuotaThreshold", "title": "WF 增强: 设置无感切号阈值" }
+    ],
+    "configuration": {
+      "title": "WF 增强",
+      "properties": {
+        "wfSwitchPlus.enableSavePoints": {
+          "type": "boolean",
+          "default": true,
+          "description": "开启省积分持续对话：全局规则只传短原因，不强制生成长 details。"
+        },
+        "wfSwitchPlus.autoQuotaSwitch": {
+          "type": "boolean",
+          "default": false,
+          "description": "开启后，伴生插件每 5 秒检查当前账号日额度。低于 autoQuotaThreshold 且存在更高额度账号时，自动调用原版 localSwitchTo 无感切号。"
+        },
+        "wfSwitchPlus.autoQuotaThreshold": {
+          "type": "number",
+          "default": 15,
+          "minimum": 1,
+          "maximum": 99,
+          "description": "无感切号触发阈值（1-99）。当前账号日额度低于此值且有更高账号时才切。"
+        },
+        "wfSwitchPlus.autoReplyEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "继续对话框收到脚本请求时，自动使用固定短语回复。"
+        },
+        "wfSwitchPlus.autoReplyText": {
+          "type": "string",
+          "default": "继续",
+          "description": "继续对话自动回复使用的固定短语。"
+        },
+        "wfSwitchPlus.autoReplyDelaySec": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 60,
+          "description": "自动回复前等待秒数，给用户取消或修改的时间。"
+        },
+        "wfSwitchPlus.baseContextTokens": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 0,
+          "description": "估算每轮对话的基础上下文 token 常量。"
+        },
+        "wfSwitchPlus.currentModelOverride": {
+          "type": "string",
+          "default": "",
+          "description": "手动指定当前模型 ID。Windsurf 未落盘当前模型选择时用于成本计算，例如 claude-opus-4-7-medium 或 gpt-5.5-high。留空则自动探测。"
+        },
+        "wfSwitchPlus.dailyQuotaTokens": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "手动覆盖：一天 100% 日额度对应多少 tokens。"
+        },
+        "wfSwitchPlus.dailyQuotaUsd": {
+          "type": "number",
+          "default": 24.48,
+          "minimum": 0,
+          "description": "单账号日额度对应美元上限。"
+        },
+        "wfSwitchPlus.weeklyQuotaUsd": {
+          "type": "number",
+          "default": 48.86,
+          "minimum": 0,
+          "description": "单账号周额度对应美元上限。"
+        },
+        "wfSwitchPlus.pricing.inputPer1M": {
+          "type": "number",
+          "default": 5,
+          "description": "新 Input token 单价（美元/1M tokens）。"
+        },
+        "wfSwitchPlus.pricing.cachedPer1M": {
+          "type": "number",
+          "default": 0.364,
+          "description": "缓存 Input token 单价（美元/1M tokens）。"
+        },
+        "wfSwitchPlus.pricing.outputPer1M": {
+          "type": "number",
+          "default": 25,
+          "description": "Output token 单价（美元/1M tokens）。"
+        },
+        "wfSwitchPlus.tokenMix.cached": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "估算混合比例：缓存输入 token 占比。"
+        },
+        "wfSwitchPlus.tokenMix.input": {
+          "type": "number",
+          "default": 0.3,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "估算混合比例：新输入 token 占比。"
+        },
+        "wfSwitchPlus.tokenMix.output": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "估算混合比例：输出 token 占比。"
+        }
+      }
+    }
+  }
+}
