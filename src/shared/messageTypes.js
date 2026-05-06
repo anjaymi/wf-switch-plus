@@ -10,6 +10,7 @@ const ACCOUNTS = Object.freeze({
   RESET_BASELINE: 'resetBaseline',
   RESET_ALL: 'resetAll',
   IMPORT_CLIPBOARD: 'importClipboard',
+  IMPORT_XINGHUO: 'importXinghuo',
   REFRESH_VIA_BRIDGE: 'refreshViaBridge',
   SWITCH_TO: 'switchTo',
   VIEW_TOKEN: 'viewToken',

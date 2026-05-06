@@ -13,11 +13,45 @@ const { readSharedState, writeSharedState, findBundleAccount, getBundleAccounts 
 const { sendBridgeRequest } = require('./src/state/bridgeRequest');
 const { pickBestAccountByDaily, isWeeklyQuotaFrozen, getAccountFreezeReason } = require('./src/domain/accountSelector');
 const { exportAllTokens } = require('./src/domain/tokenExporter');
+const { readXinghuoAccounts, mergeAccounts } = require('./src/domain/xinghuoImporter');
 const { fastSwitchToAccount, getAccountToken } = require('./src/domain/fastSwitch');
 const { checkContinueHealth, formatContinueHealthReport } = require('./src/continueHealth');
 const { ACCOUNTS, PLUS_PANEL } = require('./src/shared/messageTypes');
 
 let accountsOverviewPanel = null;
+async function importXinghuoAccounts() {
+  const result = readXinghuoAccounts();
+  if (!result.accounts.length) {
+    const detail = result.sources.map(s => (s.ok ? 'OK ' + s.accountCount : (s.reason || 'failed')) + ' · ' + s.file).join('\n');
+    vscode.window.showWarningMessage('未发现可导入的星火账号，请确认星火插件已生成 accounts.json', { modal: true, detail });
+    return { ok: false, imported: 0 };
+  }
+  const picks = result.accounts.map(acc => ({
+    label: acc.email,
+    description: (acc.planName || '星火账号') + ' · 日 ' + (acc.daily ?? '--') + '% · 周 ' + (acc.weekly ?? '--') + '%',
+    detail: acc.sourceFile,
+    picked: true,
+    acc,
+  }));
+  const selected = await vscode.window.showQuickPick(picks, {
+    placeHolder: '选择要导入到 WF 增强账号总览的星火账号',
+    canPickMany: true,
+    ignoreFocusOut: true,
+  });
+  if (!selected || !selected.length) return { ok: false, imported: 0 };
+  const shared = readSharedState();
+  const bundle = Object.assign({}, shared.bundle || {});
+  const merged = mergeAccounts(Array.isArray(bundle.accounts) ? bundle.accounts : [], selected.map(x => x.acc));
+  await writeSharedState({
+    bundle: Object.assign({}, bundle, {
+      accounts: merged.accounts,
+      syncedAt: Date.now(),
+      source: 'xinghuo-import',
+    }),
+  });
+  vscode.window.showInformationMessage('已从星火导入 ' + selected.length + ' 个账号（新增 ' + merged.added + '，更新 ' + merged.updated + '）');
+  return { ok: true, imported: selected.length };
+}
 function renderAccountsOverview(context) {
   if (!accountsOverviewPanel) return;
   const shared = readSharedState();
@@ -61,6 +95,8 @@ async function openAccountsOverview(context) {
         } catch (e) {
           vscode.window.showErrorMessage('剪贴板内容不是合法 JSON：' + (e && e.message || e));
         }
+      } else if (msg.type === ACCOUNTS.IMPORT_XINGHUO) {
+        await importXinghuoAccounts();
       } else if (msg.type === ACCOUNTS.REFRESH_VIA_BRIDGE) {
         const r = await sendBridgeRequest('refreshAccounts');
         if (r.ok) vscode.window.setStatusBarMessage('已请求原版刷新账号', 2000);

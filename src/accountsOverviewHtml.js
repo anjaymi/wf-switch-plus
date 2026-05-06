@@ -174,6 +174,7 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
         <button class="btn" onclick="send('exportTokens', 'clipboard')">导出全部 Token（剪贴板）</button>
         <button class="btn" onclick="send('exportTokens', 'file')">导出全部 Token（文件）</button>
         <button class="btn" onclick="send('importClipboard')">从剪贴板导入</button>
+        <button class="btn" onclick="send('importXinghuo')">从星火导入</button>
         <button class="btn" onclick="send('resetAll')">重置全部基线</button>
       </div>
     </div>
@@ -181,7 +182,7 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     ${empty ? `
       <div class="empty">
         <p style="font-size:14px;color:#fff"><b>没有账号数据</b></p>
-        <p>请先 <b>注入伴生桥</b>，重载窗口让原版插件至少触发一次 bundle 同步，或从剪贴板导入 JSON。</p>
+        <p>请先 <b>注入伴生桥</b>，重载窗口让原版插件至少触发一次 bundle 同步，或从剪贴板 / 星火插件导入账号。</p>
       </div>
     ` : rows}
 
