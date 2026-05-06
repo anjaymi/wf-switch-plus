@@ -11,6 +11,7 @@ const ACCOUNTS = Object.freeze({
   RESET_ALL: 'resetAll',
   IMPORT_CLIPBOARD: 'importClipboard',
   IMPORT_XINGHUO: 'importXinghuo',
+  IMPORT_XINGHUO_SELECTED: 'importXinghuoSelected',
   REFRESH_VIA_BRIDGE: 'refreshViaBridge',
   SWITCH_TO: 'switchTo',
   VIEW_TOKEN: 'viewToken',
@@ -21,6 +22,7 @@ const ACCOUNTS = Object.freeze({
   SMART_SWITCH: 'smartSwitch',
   // extension -> webview
   SHOW_TOKEN: 'showToken',
+  SHOW_XINGHUO_IMPORT: 'showXinghuoImport',
 });
 
 const TOKEN_DETAIL = Object.freeze({

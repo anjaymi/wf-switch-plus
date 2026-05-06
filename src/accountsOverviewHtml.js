@@ -204,6 +204,28 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
       </div>
     </div>
   </div>
+  <div id="xinghuoImportModal" class="modal-mask" style="display:none" onclick="if(event.target===this)closeXinghuoImportModal()">
+    <div class="modal-card xh-card">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title">从星火导入账号</div>
+          <div class="xh-sub">读取星火共享账号文件，选择后合并到 WF 增强账号总览。</div>
+        </div>
+        <button class="btn-mini" onclick="closeXinghuoImportModal()">关闭</button>
+      </div>
+      <div class="xh-toolbar">
+        <label class="xh-check"><input id="xh-all" type="checkbox" checked onchange="setXinghuoAll(this.checked)"> 全选</label>
+        <input id="xh-search" class="xh-search" placeholder="搜索邮箱 / 套餐" oninput="renderXinghuoImportList()">
+        <span id="xh-count" class="xh-count"></span>
+      </div>
+      <div id="xh-source" class="xh-source"></div>
+      <div id="xh-list" class="xh-list"></div>
+      <div class="xh-footer">
+        <button class="btn-mini" onclick="closeXinghuoImportModal()">取消</button>
+        <button id="xh-import-btn" class="btn-mini btn-primary" onclick="submitXinghuoImport()">导入所选账号</button>
+      </div>
+    </div>
+  </div>
   <style>
     .modal-mask{position:fixed;inset:0;background:rgba(2,6,15,.78);backdrop-filter:blur(8px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px}
     .modal-card{width:100%;max-width:680px;max-height:90vh;overflow:auto;background:linear-gradient(180deg,rgba(30,41,59,.92),rgba(15,23,42,.92));border:1px solid rgba(139,92,246,.4);border-radius:16px;padding:18px 22px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
@@ -216,10 +238,35 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     .mval{font-size:12px;color:#e2e8f0;word-break:break-all}
     .modal-row textarea{width:100%;min-height:62px;font-family:ui-monospace,Consolas,monospace;font-size:11px;color:#e2e8f0;background:rgba(2,6,15,.6);border:1px solid rgba(148,163,184,.18);border-radius:8px;padding:8px 10px;resize:vertical}
     .row-actions{display:flex;gap:6px;justify-content:flex-end;margin-top:6px}
+    .xh-card{max-width:880px;padding:0;overflow:hidden}
+    .xh-card .modal-head{padding:18px 22px;margin:0}
+    .xh-sub{font-size:11px;color:#94a3b8;margin-top:3px}
+    .xh-toolbar{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:12px 22px;border-bottom:1px solid rgba(148,163,184,.12);background:rgba(2,6,15,.22)}
+    .xh-check{display:flex;align-items:center;gap:7px;color:#cbd5e1;font-size:12px;white-space:nowrap}
+    .xh-check input,.xh-row input{accent-color:#8b5cf6}
+    .xh-search{width:100%;border:1px solid rgba(148,163,184,.18);background:rgba(2,6,15,.45);color:#e2e8f0;border-radius:10px;padding:8px 11px;font-size:12px;outline:none}
+    .xh-search:focus{border-color:rgba(139,92,246,.55);box-shadow:0 0 0 3px rgba(139,92,246,.12)}
+    .xh-count{font-size:11px;color:#a78bfa;font-weight:700;white-space:nowrap}
+    .xh-source{padding:10px 22px;font-size:11px;color:#94a3b8;border-bottom:1px solid rgba(148,163,184,.1);word-break:break-all}
+    .xh-list{max-height:52vh;overflow:auto;padding:10px 14px;background:rgba(2,6,15,.16)}
+    .xh-row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:11px 12px;border:1px solid rgba(148,163,184,.12);border-radius:12px;background:rgba(15,23,42,.5);margin-bottom:8px;transition:all .15s}
+    .xh-row:hover{border-color:rgba(139,92,246,.42);background:rgba(99,102,241,.12)}
+    .xh-email{font-size:13px;font-weight:800;color:#fff;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .xh-meta{font-size:11px;color:#94a3b8;margin-top:3px;word-break:break-all}
+    .xh-quota{display:flex;gap:8px;align-items:center;white-space:nowrap}
+    .xh-chip{font-size:10px;padding:3px 7px;border-radius:999px;background:rgba(99,102,241,.16);color:#c4b5fd;border:1px solid rgba(99,102,241,.32);font-weight:700}
+    .xh-chip.warn{background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.3);color:#fca5a5}
+    .xh-empty{padding:32px;text-align:center;color:#94a3b8;border:1px dashed rgba(148,163,184,.24);border-radius:12px}
+    .xh-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 22px;border-top:1px solid rgba(148,163,184,.12);background:rgba(2,6,15,.2)}
   </style>
   <script>
     const vscode=acquireVsCodeApi();
+    var xinghuoAccounts=[];
+    var xinghuoSources=[];
+    var xinghuoSelected={};
     function send(type,payload){vscode.postMessage({type:type,payload:payload});}
+    function esc(s){return String(s??'').replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+    function fmtXhPct(v){if(v===null||v===undefined||v===''||Number.isNaN(Number(v)))return '--';return Math.max(0,Math.min(100,Math.round(Number(v))))+'%';}
     function openTokenModal(d){
       document.getElementById('tk-email').textContent=d.email||'';
       document.getElementById('tk-plan').textContent=(d.planName||'-')+(d.valid===false?'  异常':'');
@@ -231,7 +278,54 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     }
     function closeTokenModal(){document.getElementById('tokenModal').style.display='none';}
     function copyField(id){var el=document.getElementById(id);el.select();el.setSelectionRange(0,el.value.length);try{document.execCommand('copy');send('toast','已复制');}catch(e){send('toast','复制失败');}}
-    window.addEventListener('message',function(ev){var msg=ev.data||{};if(msg.type==='showToken'&&msg.payload)openTokenModal(msg.payload);});
+    function openXinghuoImportModal(payload){
+      xinghuoAccounts=(payload&&Array.isArray(payload.accounts))?payload.accounts:[];
+      xinghuoSources=(payload&&Array.isArray(payload.sources))?payload.sources:[];
+      xinghuoSelected={};
+      xinghuoAccounts.forEach(function(a){if(a&&a.email)xinghuoSelected[String(a.email).toLowerCase()]=true;});
+      document.getElementById('xinghuoImportModal').style.display='flex';
+      document.getElementById('xh-search').value='';
+      renderXinghuoImportList();
+    }
+    function closeXinghuoImportModal(){document.getElementById('xinghuoImportModal').style.display='none';}
+    function renderXinghuoImportList(){
+      var q=(document.getElementById('xh-search').value||'').trim().toLowerCase();
+      var list=xinghuoAccounts.filter(function(a){return !q||String(a.email||'').toLowerCase().includes(q)||String(a.planName||'').toLowerCase().includes(q);});
+      var source=xinghuoSources.find(function(s){return s&&s.ok&&s.accountCount>0;});
+      document.getElementById('xh-source').textContent=source?('来源：'+source.file):'未发现可导入的星火账号文件';
+      if(!list.length){
+        document.getElementById('xh-list').innerHTML='<div class="xh-empty">没有匹配的星火账号</div>';
+        updateXinghuoSelected();
+        return;
+      }
+      document.getElementById('xh-list').innerHTML=list.map(function(a){
+        var frozen=a.manualFrozen?'<span class="xh-chip warn">手动冻结</span>':'';
+        var key=String(a.email||'').toLowerCase();
+        return '<label class="xh-row"><input class="xh-item" type="checkbox" '+(xinghuoSelected[key]?'checked':'')+' data-email="'+esc(a.email)+'" onchange="toggleXinghuoItem(this)"><div><div class="xh-email">'+esc(a.email)+frozen+'</div><div class="xh-meta">'+esc(a.planName||'星火账号')+' · '+esc(a.sourceFile||'')+'</div></div><div class="xh-quota"><span class="xh-chip">日 '+fmtXhPct(a.daily)+'</span><span class="xh-chip">周 '+fmtXhPct(a.weekly)+'</span></div></label>';
+      }).join('');
+      updateXinghuoSelected();
+    }
+    function setXinghuoAll(checked){
+      xinghuoAccounts.forEach(function(a){if(a&&a.email)xinghuoSelected[String(a.email).toLowerCase()]=checked;});
+      Array.from(document.querySelectorAll('.xh-item')).forEach(function(el){el.checked=checked;});
+      updateXinghuoSelected();
+    }
+    function toggleXinghuoItem(el){xinghuoSelected[String(el.getAttribute('data-email')||'').toLowerCase()]=el.checked;updateXinghuoSelected();}
+    function updateXinghuoSelected(){
+      var items=Array.from(document.querySelectorAll('.xh-item'));
+      var selected=xinghuoAccounts.filter(function(a){return a&&a.email&&xinghuoSelected[String(a.email).toLowerCase()];}).length;
+      var all=document.getElementById('xh-all');
+      all.checked=xinghuoAccounts.length>0&&selected===xinghuoAccounts.length;
+      all.indeterminate=selected>0&&selected<xinghuoAccounts.length;
+      document.getElementById('xh-count').textContent='已选 '+selected+' / '+xinghuoAccounts.length;
+      document.getElementById('xh-import-btn').disabled=selected===0;
+    }
+    function submitXinghuoImport(){
+      var selected=xinghuoAccounts.filter(function(a){return a&&a.email&&xinghuoSelected[String(a.email).toLowerCase()];}).map(function(a){return a.email;});
+      send('importXinghuoSelected',selected);
+      closeXinghuoImportModal();
+    }
+    window.addEventListener('message',function(ev){var msg=ev.data||{};if(msg.type==='showToken'&&msg.payload)openTokenModal(msg.payload);if(msg.type==='showXinghuoImport'&&msg.payload)openXinghuoImportModal(msg.payload);});
   </script>
   </body></html>`;
 }
