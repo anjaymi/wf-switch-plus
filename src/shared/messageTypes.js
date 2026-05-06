@@ -14,6 +14,7 @@ const ACCOUNTS = Object.freeze({
   SWITCH_TO: 'switchTo',
   VIEW_TOKEN: 'viewToken',
   COPY_TOKEN: 'copyToken',
+  TOGGLE_FREEZE: 'toggleFreeze',
   EXPORT_TOKENS: 'exportTokens',
   TOAST: 'toast',
   SMART_SWITCH: 'smartSwitch',

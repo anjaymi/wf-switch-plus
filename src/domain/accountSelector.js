@@ -1,9 +1,28 @@
-const { getBundleAccounts } = require('../state/sharedState');
+const { readSharedState, getBundleAccounts } = require('../state/sharedState');
+
+function accountKey(account) {
+  const email = typeof account === 'string' ? account : (account && account.email);
+  return String(email || '').trim().toLowerCase();
+}
+
+function isManuallyFrozenAccount(account) {
+  if (account && typeof account === 'object' && account.manualFrozen) return true;
+  const key = accountKey(account);
+  if (!key) return false;
+  const shared = readSharedState();
+  const map = shared && shared.manualFrozenAccounts;
+  return !!(map && map[key]);
+}
+
+function getAccountFreezeReason(account) {
+  if (isManuallyFrozenAccount(account)) return '手动冻结';
+  if (!account || account.weekly === undefined || account.weekly === null || account.weekly === '') return '';
+  const weekly = Number(account.weekly);
+  return Number.isFinite(weekly) && weekly <= 0 ? '周额度冻结' : '';
+}
 
 function isWeeklyQuotaFrozen(account) {
-  if (!account || account.weekly === undefined || account.weekly === null || account.weekly === '') return false;
-  const weekly = Number(account.weekly);
-  return Number.isFinite(weekly) && weekly <= 0;
+  return !!getAccountFreezeReason(account);
 }
 
 function pickBestAccountByDaily() {
@@ -16,4 +35,4 @@ function pickBestAccountByDaily() {
   }, null);
 }
 
-module.exports = { pickBestAccountByDaily, isWeeklyQuotaFrozen };
+module.exports = { pickBestAccountByDaily, isWeeklyQuotaFrozen, isManuallyFrozenAccount, getAccountFreezeReason };

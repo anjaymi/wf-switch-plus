@@ -1,7 +1,7 @@
 ﻿const fs = require('fs');
 const { buildSparkPayload, renderSparkCard, SPARK_CLIENT_SCRIPT } = require('./sparkCard');
 const { detectCurrentModel, estimateModelCost, getDynamicCatalog } = require('./modelCatalog');
-const { isWeeklyQuotaFrozen } = require('./domain/accountSelector');
+const { isWeeklyQuotaFrozen, getAccountFreezeReason } = require('./domain/accountSelector');
 
 const ICONS = {
   bolt: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
@@ -89,7 +89,7 @@ function getPlusPanelLiveData({ stats, pricing, bundleAccounts }) {
 
 function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInjected, autoReplyEnabled, autoReplyText, autoReplyDelaySec, saveTokenMode, autoQuotaSwitch, autoQuotaThreshold, bundleAccounts }) {
   const live = getPlusPanelLiveData({ stats, pricing, bundleAccounts });
-  const switchAccounts = (Array.isArray(bundleAccounts) ? bundleAccounts : []).filter(a => a && a.email).map(a => ({ email: String(a.email), daily: a.daily, weekly: a.weekly, hasToken: !!(a.sessionToken || a.apiKey || a.accessToken || a.token), valid: a.valid !== false, frozen: isWeeklyQuotaFrozen(a) }));
+  const switchAccounts = (Array.isArray(bundleAccounts) ? bundleAccounts : []).filter(a => a && a.email).map(a => ({ email: String(a.email), daily: a.daily, weekly: a.weekly, hasToken: !!(a.sessionToken || a.apiKey || a.accessToken || a.token), valid: a.valid !== false, frozen: isWeeklyQuotaFrozen(a), freezeReason: getAccountFreezeReason(a) }));
   const switchAccountsJson = JSON.stringify(switchAccounts).replace(/</g, '\\u003c');
   const { heroTotalCost, heroTotalTokens, aggregateDailyUsd, aggregateDailyTokens, totalCost, localTokens, accountCount, requestCount, sparkTitle, sparkHtml, trend, trendClass, recentCount, recentAvg, recentMax, sparkLastLabel, sparkLastVal } = live;
 
@@ -321,7 +321,7 @@ function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInject
     "function escClient(v){return String(v||\"\").replace(/[&<>\\\"]/g,c=>({\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",\"\\\\\\\"\":\"&quot;\"}[c]||c));}",
     "function openSwitchModal(){document.getElementById(\"switchModal\").classList.add(\"show\");renderSwitchAccounts();}",
     "function closeSwitchModal(){document.getElementById(\"switchModal\").classList.remove(\"show\");}",
-    "function renderSwitchAccounts(){const box=document.getElementById(\"switchAccountList\");const list=(switchAccounts||[]).filter(a=>a&&a.valid!==false);if(!list.length){box.innerHTML=\"<div class=\\\"mini-log\\\">暂无账号，请先刷新或注入伴生桥。</div>\";return;}box.innerHTML=list.map(a=>{const frozen=!!a.frozen;const state=frozen?\"周额度冻结\":(a.hasToken?\"可 Zen 快切\":\"缺少 token\");const click=frozen?\"\":(\" onclick=\\\"fastSwitchEmail('\"+escClient(a.email).replace(/'/g,\"&#39;\")+\"')\\\"\");return \"<button class=\\\"account-option \"+(frozen?\"disabled\":\"\")+\"\\\"\"+click+\"><b>\"+escClient(a.email)+\"</b><span>日 \"+(a.daily??\"--\")+\"%  周 \"+(a.weekly??\"--\")+\"%  \"+state+\"</span></button>\";}).join(\"\");}",
+    "function renderSwitchAccounts(){const box=document.getElementById(\"switchAccountList\");const list=(switchAccounts||[]).filter(a=>a&&a.valid!==false);if(!list.length){box.innerHTML=\"<div class=\\\"mini-log\\\">暂无账号，请先刷新或注入伴生桥。</div>\";return;}box.innerHTML=list.map(a=>{const frozen=!!a.frozen;const state=frozen?(a.freezeReason||\"已冻结\"):(a.hasToken?\"可 Zen 快切\":\"缺少 token\");const click=frozen?\"\":(\" onclick=\\\"fastSwitchEmail('\"+escClient(a.email).replace(/'/g,\"&#39;\")+\"')\\\"\");return \"<button class=\\\"account-option \"+(frozen?\"disabled\":\"\")+\"\\\"\"+click+\"><b>\"+escClient(a.email)+\"</b><span>日 \"+(a.daily??\"--\")+\"%  周 \"+(a.weekly??\"--\")+\"%  \"+state+\"</span></button>\";}).join(\"\");}",
     "function fastSwitchEmail(email){document.getElementById(\"switchLog\").textContent=\"正在快速切换 \"+email+\" \";send(\"fastSwitchToEmail\",{email:email});closeSwitchModal();}",
     'document.addEventListener("keydown",e=>{if(e.key==="Escape"){closePhraseModal();closeActivateModal();closeSwitchModal();}});',
     '</script>',

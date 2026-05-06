@@ -1,5 +1,5 @@
 ﻿const { escapeHtml, escapeAttrArg } = require('./shared/htmlEscape');
-const { isWeeklyQuotaFrozen } = require('./domain/accountSelector');
+const { isWeeklyQuotaFrozen, isManuallyFrozenAccount, getAccountFreezeReason } = require('./domain/accountSelector');
 function fmtPct(value) {
   if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) return '--';
   return Math.max(0, Math.min(100, Math.round(Number(value)))) + '%';
@@ -54,6 +54,8 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     const lastLive = a.lastLiveAt || a.sessionRefreshedAt || 0;
     const valid = (a.valid !== false);
     const frozen = isWeeklyQuotaFrozen(a);
+    const manualFrozen = isManuallyFrozenAccount(a);
+    const freezeReason = getAccountFreezeReason(a);
     const isCurrent = email && currentEmail && email.toLowerCase() === String(currentEmail).toLowerCase();
     const emailArg = escapeAttrArg(email);
     const dColor = daily === null ? '#475569' : (daily >= 60 ? '#22c55e' : daily >= 25 ? '#f59e0b' : '#ef4444');
@@ -66,7 +68,7 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
           <div class="acc-email">${escapeHtml(email)}
             ${isCurrent ? '<span class="badge badge-cur">当前账号</span>' : ''}
             ${isBest ? '<span class="badge badge-best">日额度最高</span>' : ''}
-            ${frozen ? '<span class="badge badge-frozen">周额度冻结</span>' : ''}
+            ${frozen ? '<span class="badge badge-frozen">' + escapeHtml(freezeReason) + '</span>' : ''}
             ${!valid ? '<span class="badge badge-bad">异常</span>' : ''}
           </div>
           <div class="acc-meta">${planName ? '套餐 ' + escapeHtml(planName) : ''}${planName && planEndStr ? '  ' : ''}${planEndStr}${lastLive ? '  上次活动 ' + relTime(lastLive) : ''}</div>
@@ -77,6 +79,7 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
         </div>
         <div class="acc-actions">
           ${isCurrent ? '' : (frozen ? '<button class="btn-mini" disabled>已冻结</button>' : `<button class="btn-mini btn-primary" onclick="send('switchTo', ${emailArg})">切换到</button>`)}
+          <button class="btn-mini ${manualFrozen ? 'btn-warn' : ''}" onclick="send('toggleFreeze', ${emailArg})">${manualFrozen ? '取消冻结' : '冻结账号'}</button>
           <button class="btn-mini" onclick="send('viewToken', ${emailArg})">查看 Token</button>
           <button class="btn-mini" onclick="send('copyToken', ${emailArg})">复制 Token</button>
           <button class="btn-mini" onclick="send('copyEmail', ${emailArg})">复制邮箱</button>
@@ -138,6 +141,7 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     .btn-mini:hover{border-color:#6366f1;color:#fff}
     .btn-mini:disabled:hover{border-color:rgba(148,163,184,.2);color:#cbd5e1}
     .btn-mini.btn-primary{background:linear-gradient(135deg,#6366f1,#8b5cf6);border-color:transparent;color:#fff;font-weight:600}
+    .btn-mini.btn-warn{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.36);color:#fca5a5}
     .empty{text-align:center;padding:52px 20px;border:1px dashed rgba(148,163,184,.25);border-radius:16px;color:#94a3b8;font-size:13px;line-height:1.7}
     .empty b{color:#fff;font-weight:600}
     .foot{margin-top:18px;padding-top:14px;border-top:1px solid rgba(148,163,184,.1);font-size:11px;color:#94a3b8}

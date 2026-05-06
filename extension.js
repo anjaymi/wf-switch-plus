@@ -11,7 +11,7 @@ const { getAccountsOverviewHtml } = require('./src/accountsOverviewHtml');
 const originalBridge = require('./src/originalBridge');
 const { readSharedState, writeSharedState, findBundleAccount, getBundleAccounts } = require('./src/state/sharedState');
 const { sendBridgeRequest } = require('./src/state/bridgeRequest');
-const { pickBestAccountByDaily, isWeeklyQuotaFrozen } = require('./src/domain/accountSelector');
+const { pickBestAccountByDaily, isWeeklyQuotaFrozen, getAccountFreezeReason } = require('./src/domain/accountSelector');
 const { exportAllTokens } = require('./src/domain/tokenExporter');
 const { fastSwitchToAccount, getAccountToken } = require('./src/domain/fastSwitch');
 const { checkContinueHealth, formatContinueHealthReport } = require('./src/continueHealth');
@@ -69,7 +69,7 @@ async function openAccountsOverview(context) {
         const email = String(msg.payload);
         const acc = findBundleAccount(email);
         if (isWeeklyQuotaFrozen(acc)) {
-          vscode.window.showWarningMessage('账号 ' + email + ' 周额度已用尽，已冻结切号');
+          vscode.window.showWarningMessage('账号 ' + email + ' 已冻结：' + (getAccountFreezeReason(acc) || '不可切号'));
           return;
         }
         const r = await sendBridgeRequest('localSwitchTo', { email });
@@ -86,6 +86,16 @@ async function openAccountsOverview(context) {
         await vscode.env.clipboard.writeText(acc.sessionToken);
         vscode.window.setStatusBarMessage('已复制 ' + acc.email + ' 的 sessionToken', 2500);
         return;
+      } else if (msg.type === ACCOUNTS.TOGGLE_FREEZE && msg.payload) {
+        const email = String(msg.payload).trim();
+        const key = email.toLowerCase();
+        const shared = readSharedState();
+        const map = Object.assign({}, shared.manualFrozenAccounts || {});
+        const frozen = !!map[key];
+        if (frozen) delete map[key];
+        else map[key] = { email, frozenAt: Date.now() };
+        await writeSharedState({ manualFrozenAccounts: map });
+        vscode.window.setStatusBarMessage((frozen ? '已取消冻结 ' : '已手动冻结 ') + email, 2000);
       } else if (msg.type === ACCOUNTS.EXPORT_TOKENS) {
         const r = await exportAllTokens(String(msg.payload || 'clipboard'));
         if (r.ok) vscode.window.showInformationMessage(r.message);
@@ -298,7 +308,7 @@ async function fastSwitchAccountByEmail(context, email) {
     return { ok: false, error: 'missing-token' };
   }
   if (isWeeklyQuotaFrozen(account)) {
-    vscode.window.showWarningMessage('账号 ' + account.email + ' 周额度已用尽，已冻结切号');
+    vscode.window.showWarningMessage('账号 ' + account.email + ' 已冻结：' + (getAccountFreezeReason(account) || '不可切号'));
     return { ok: false, error: 'weekly-quota-frozen' };
   }
   const r = await fastSwitchToAccount(account);
