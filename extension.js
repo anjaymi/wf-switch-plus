@@ -162,16 +162,7 @@ async function openAccountsOverview(context) {
         vscode.window.setStatusBarMessage(String(msg.payload), 1500);
         return;
       } else if (msg.type === ACCOUNTS.SMART_SWITCH) {
-        const best = pickBestAccountByDaily();
-        if (!best) { vscode.window.showWarningMessage('没有可切换的账号（bundle 为空、都无效或周额度已冻结）'); return; }
-        const curEmail = (readSharedState().currentEmail) || context.globalState.get('lastEmail', '');
-        if (curEmail && String(curEmail).toLowerCase() === String(best.email).toLowerCase()) {
-          vscode.window.showInformationMessage('当前账号 ' + best.email + ' 已是日额度最高，无需切换');
-          return;
-        }
-        const r = await sendBridgeRequest('localSwitchTo', { email: best.email });
-        if (r.ok) vscode.window.showInformationMessage('已自动切换到日额度最高账号：' + best.email);
-        else vscode.window.showErrorMessage('自动切换失败：' + (r.error || '未知'));
+        await fastSwitchBestAccount(context, { confirm: false });
       }
     } catch (e) {
       vscode.window.showErrorMessage('账号总览操作失败：' + (e && e.message || e));
@@ -254,6 +245,17 @@ function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function runZenPostSwitchHooks(context, email) {
+  // Zen 切号成功后必做的衔接：让原版插件刷新登录态/账号池，刷新所有面板，避免积分识别和对话框失效。
+  try { await sendBridgeRequest('refreshAccounts'); } catch (e) { console.warn('[wfSwitchPlus] zen post refresh failed:', e && e.message); }
+  try { panelProvider?.refresh(); } catch {}
+  try { renderAccountsOverview(context); } catch {}
+  try { refreshDetailPanel(); } catch {}
+  if (email) {
+    try { await context.globalState.update('lastEmail', email); } catch {}
+  }
+}
+
 async function fastSwitchBestAccount(context, options = {}) {
   const best = pickBestAccountByDaily();
   if (!best) {
@@ -271,12 +273,12 @@ async function fastSwitchBestAccount(context, options = {}) {
   }
   if (options.confirm !== false) {
     const pick = await vscode.window.showWarningMessage(
-      '实验性 Zen 快速切号：将直接调用 Windsurf loginWithAuthToken 注入 ' + best.email + '，默认不重载窗口。失败时可回退原版桥切号。',
+      'Zen 自动切号：将直接调用 Windsurf loginWithAuthToken 注入 ' + best.email + '，不主动重载窗口。失败时可回退原版桥切号。',
       { modal: true },
-      '快速切换',
+      'Zen 切换',
       '取消'
     );
-    if (pick !== '快速切换') return { ok: false, canceled: true };
+    if (pick !== 'Zen 切换') return { ok: false, canceled: true };
   }
   const r = await fastSwitchToAccount(best);
   if (r.ok) {
@@ -291,29 +293,32 @@ async function fastSwitchBestAccount(context, options = {}) {
       },
     });
     const msg = r.landed
-      ? 'Zen 快速切号已落地：' + best.email
-      : 'Zen 快速切号已发起：' + best.email + '（当前登录态显示：' + (r.currentUser || '未知') + '）';
+      ? 'Zen 切号已落地：' + best.email
+      : 'Zen 切号已发起：' + best.email + '（当前登录态：' + (r.currentUser || '未知') + '）';
     vscode.window.showInformationMessage(msg);
-    panelProvider?.refresh();
-    renderAccountsOverview(context);
+    await runZenPostSwitchHooks(context, best.email);
     return r;
   }
   const cfg = vscode.workspace.getConfiguration('wfSwitchPlus');
   if (cfg.get('fastSwitchFallbackToOriginal', true)) {
-    vscode.window.setStatusBarMessage('Zen 快速切号失败，回退原版桥：' + (r.error || '未知'), 3500);
+    vscode.window.setStatusBarMessage('Zen 切号失败，回退原版桥：' + (r.error || '未知'), 3500);
     const fallback = await sendBridgeRequest('localSwitchTo', { email: best.email });
-    if (fallback.ok) vscode.window.showInformationMessage('已回退原版桥切换到 ' + best.email);
-    else vscode.window.showErrorMessage('Zen 快速切号失败，原版桥回退也失败：' + (fallback.error || r.error || '未知'));
+    if (fallback.ok) {
+      vscode.window.showInformationMessage('已回退原版桥切换到 ' + best.email);
+      await runZenPostSwitchHooks(context, best.email);
+    } else {
+      vscode.window.showErrorMessage('Zen 切号失败，原版桥回退也失败：' + (fallback.error || r.error || '未知'));
+    }
     return Object.assign({ fallback }, r);
   }
-  vscode.window.showErrorMessage('Zen 快速切号失败：' + (r.error || '未知'));
+  vscode.window.showErrorMessage('Zen 切号失败：' + (r.error || '未知'));
   return r;
 }
 
 async function fastSwitchPickAccount(context) {
   const accounts = getBundleAccounts().filter(a => a && a.email && a.valid !== false && getAccountToken(a) && !isWeeklyQuotaFrozen(a));
   if (!accounts.length) {
-    vscode.window.showWarningMessage('没有可 Zen 快速切换的账号（需要 token，且周额度不能为 0）');
+    vscode.window.showWarningMessage('没有可 Zen 切换的账号（需要 token，且周额度不能为 0）');
     return { ok: false, error: 'no-token-account' };
   }
   const pick = await vscode.window.showQuickPick(accounts.map(a => ({
@@ -321,17 +326,17 @@ async function fastSwitchPickAccount(context) {
     description: '日 ' + (a.daily ?? '--') + '% · 周 ' + (a.weekly ?? '--') + '%',
     account: a,
   })), {
-    placeHolder: '选择要 Zen 快速切换的账号（不主动重载窗口）',
+    placeHolder: '选择要 Zen 切换的账号（不主动重载窗口）',
     ignoreFocusOut: true,
   });
   if (!pick) return { ok: false, canceled: true };
   const confirm = await vscode.window.showWarningMessage(
-    '实验性 Zen 快速切号：将直接调用 Windsurf loginWithAuthToken 注入 ' + pick.account.email + '。',
+    'Zen 切号：将直接调用 Windsurf loginWithAuthToken 注入 ' + pick.account.email + '。',
     { modal: true },
-    '快速切换',
+    'Zen 切换',
     '取消'
   );
-  if (confirm !== '快速切换') return { ok: false, canceled: true };
+  if (confirm !== 'Zen 切换') return { ok: false, canceled: true };
   const r = await fastSwitchToAccount(pick.account);
   if (r.ok) {
     await writeSharedState({
@@ -344,12 +349,11 @@ async function fastSwitchPickAccount(context) {
         currentUser: r.currentUser || '',
       },
     });
-    vscode.window.showInformationMessage((r.landed ? 'Zen 快速切号已落地：' : 'Zen 快速切号已发起：') + pick.account.email);
-    panelProvider?.refresh();
-    renderAccountsOverview(context);
+    vscode.window.showInformationMessage((r.landed ? 'Zen 切号已落地：' : 'Zen 切号已发起：') + pick.account.email);
+    await runZenPostSwitchHooks(context, pick.account.email);
     return r;
   }
-  vscode.window.showErrorMessage('Zen 快速切号失败：' + (r.error || '未知'));
+  vscode.window.showErrorMessage('Zen 切号失败：' + (r.error || '未知'));
   return r;
 }
 
@@ -361,7 +365,7 @@ async function fastSwitchAccountByEmail(context, email) {
     return { ok: false, error: 'account-not-found' };
   }
   if (!getAccountToken(account)) {
-    vscode.window.showWarningMessage('账号 ' + account.email + ' 缺少 sessionToken/apiKey，无法 Zen 快速切号');
+    vscode.window.showWarningMessage('账号 ' + account.email + ' 缺少 sessionToken/apiKey，无法 Zen 切号');
     return { ok: false, error: 'missing-token' };
   }
   if (isWeeklyQuotaFrozen(account)) {
@@ -380,19 +384,22 @@ async function fastSwitchAccountByEmail(context, email) {
         currentUser: r.currentUser || '',
       },
     });
-    vscode.window.showInformationMessage((r.landed ? 'Zen 快速切号已落地：' : 'Zen 快速切号已发起：') + account.email);
-    panelProvider?.refresh();
-    renderAccountsOverview(context);
+    vscode.window.showInformationMessage((r.landed ? 'Zen 切号已落地：' : 'Zen 切号已发起：') + account.email);
+    await runZenPostSwitchHooks(context, account.email);
     return r;
   }
   const cfg = vscode.workspace.getConfiguration('wfSwitchPlus');
   if (cfg.get('fastSwitchFallbackToOriginal', true)) {
     const fallback = await sendBridgeRequest('localSwitchTo', { email: account.email });
-    if (fallback.ok) vscode.window.showInformationMessage('Zen 失败，已回退原版桥切换到 ' + account.email);
-    else vscode.window.showErrorMessage('Zen 快速切号失败，原版桥回退也失败：' + (fallback.error || r.error || '未知'));
+    if (fallback.ok) {
+      vscode.window.showInformationMessage('Zen 失败，已回退原版桥切换到 ' + account.email);
+      await runZenPostSwitchHooks(context, account.email);
+    } else {
+      vscode.window.showErrorMessage('Zen 切号失败，原版桥回退也失败：' + (fallback.error || r.error || '未知'));
+    }
     return Object.assign({ fallback }, r);
   }
-  vscode.window.showErrorMessage('Zen 快速切号失败：' + (r.error || '未知'));
+  vscode.window.showErrorMessage('Zen 切号失败：' + (r.error || '未知'));
   return r;
 }
 
@@ -969,8 +976,7 @@ function activate(context) {
       lastAutoSwitchAt = Date.now();
       vscode.window.setStatusBarMessage('⚡ 当前 ' + curEmail + ' 日额度 ' + curAcc.daily + '% < ' + threshold + '%，自动切到 ' + best.email, 4000);
       try {
-        if (cfg.get('autoQuotaSwitchUseFastPath', false)) await fastSwitchBestAccount(context, { confirm: false });
-        else await sendBridgeRequest('localSwitchTo', { email: best.email });
+        await fastSwitchBestAccount(context, { confirm: false });
       } catch (e) { console.warn('[wfSwitchPlus] auto switch failed:', e && e.message); }
     } catch {}
   }, 5000);

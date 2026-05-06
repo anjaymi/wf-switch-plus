@@ -242,7 +242,7 @@ function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInject
           '<button class="btn" onclick="send(\'checkOriginalUpdate\')"><span class="ic">', ICONS.package, '</span>检查更新</button>',
         '</div></div>',
       '</div>',
-      '<div class="switch-row" onclick="send(\'toggleAutoQuotaSwitch\')" style="margin-top:10px;margin-left:0"><div class="switch ', (autoQuotaSwitch ? 'on' : ''), '"></div><div class="switch-text"><b>无感切号（按日额度）</b><div class="meta">阈值 ', autoQuotaThreshold, '%  ', (autoQuotaSwitch ? '后台监控中' : '已关闭'), '  <a class="link" onclick="event.stopPropagation();send(\'setQuotaThreshold\')">改阈值</a></div></div></div>',
+      '<div class="switch-row" onclick="send(\'toggleAutoQuotaSwitch\')" style="margin-top:10px;margin-left:0"><div class="switch ', (autoQuotaSwitch ? 'on' : ''), '"></div><div class="switch-text"><b>Zen 自动切号（按日额度）</b><div class="meta">阈值 ', autoQuotaThreshold, '%  ', (autoQuotaSwitch ? '后台监控中，低于阈值自动 Zen 切到最高账号' : '已关闭'), '  <a class="link" onclick="event.stopPropagation();send(\'setQuotaThreshold\')">改阈值</a></div></div></div>',
       '<div class="switch-row" onclick="send(\'toggleSaveToken\')" style="margin-left:0"><div class="switch ', (saveTokenMode ? 'on' : ''), '"></div><div class="switch-text"><b>节约 Token 模式</b><div class="meta">', (saveTokenMode ? '精简全局规则，并截断长 details' : '允许传完整 details（耗 token）'), '</div></div></div>',
     '</div>',
 
