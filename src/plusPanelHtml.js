@@ -1,5 +1,7 @@
 ﻿const fs = require('fs');
 const { buildSparkPayload, renderSparkCard, SPARK_CLIENT_SCRIPT } = require('./sparkCard');
+const { detectCurrentModel, estimateModelCost, getDynamicCatalog } = require('./modelCatalog');
+const { isWeeklyQuotaFrozen } = require('./domain/accountSelector');
 
 const ICONS = {
   bolt: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
@@ -34,7 +36,24 @@ function escapeHtml(value) { return String(value || '').replace(/&/g, '&amp;').r
 // sparklineSvg 已抽离到 ./sparkCard.js
 
 function getPlusPanelLiveData({ stats, pricing, bundleAccounts }) {
-  const totalCost = stats.totalEstimatedTokens * pricing.blendedPer1M / 1_000_000;
+  // 优先使用 Windsurf 官方动态价格表算本伴生累计花费
+  const detected = (() => { try { return detectCurrentModel(); } catch { return null; } })();
+  const modelId = detected && detected.id || '';
+  const realTokens = Math.max(0, Number(stats.totalRealTokens || 0));
+  const localTokens = realTokens || (stats.totalEstimatedTokens || 0);
+  const localTokenSource = realTokens ? 'real' : 'estimated';
+  const costEstimate = estimateModelCost(localTokens, modelId, {
+    cached: pricing.mixCached,
+    input: pricing.mixInput,
+    output: pricing.mixOutput,
+  });
+  const officialCost = costEstimate && costEstimate.known
+    ? costEstimate.cost
+    : null;
+  const blendedCost = localTokens * pricing.blendedPer1M / 1_000_000;
+  const totalCost = officialCost != null ? officialCost : blendedCost;
+  const costSource = officialCost != null ? (costEstimate.source || 'model') : 'blended';
+  const blendedPer1M = officialCost != null ? (costEstimate.blendedPer1M || pricing.blendedPer1M) : pricing.blendedPer1M;
   const accs = Array.isArray(bundleAccounts) ? bundleAccounts.filter(a => a && a.email) : [];
   const dailyVals = accs.map(a => a.daily).filter(v => v !== undefined && v !== null && !Number.isNaN(Number(v))).map(Number);
   const avgDaily = dailyVals.length ? dailyVals.reduce((s, v) => s + v, 0) / dailyVals.length : null;
@@ -42,15 +61,26 @@ function getPlusPanelLiveData({ stats, pricing, bundleAccounts }) {
   const aggregateDailyUsd = avgUsedRatio * (pricing.dailyQuotaUsd || 0) * accs.length;
   const aggregateDailyTokens = avgUsedRatio * (pricing.dailyQuotaTokens || 0) * accs.length;
   const heroTotalCost = totalCost + aggregateDailyUsd;
-  const heroTotalTokens = (stats.totalEstimatedTokens || 0) + aggregateDailyTokens;
+  const heroTotalTokens = localTokens + aggregateDailyTokens;
   const sparkPayload = buildSparkPayload({ stats, pricing, bundleAccounts });
+  const dynamicCatalog = getDynamicCatalog();
   return Object.assign({
     heroTotalCost,
     heroTotalTokens,
     aggregateDailyUsd,
     aggregateDailyTokens,
     totalCost,
-    localTokens: stats.totalEstimatedTokens || 0,
+    costSource,
+    blendedPer1M,
+    officialPriceInput: costEstimate && costEstimate.inputPer1M,
+    officialPriceCached: costEstimate && costEstimate.cachedPer1M,
+    officialPriceOutput: costEstimate && costEstimate.outputPer1M,
+    officialCreditMultiplier: costEstimate && costEstimate.creditMultiplier,
+    officialModelLabel: costEstimate && costEstimate.info && (costEstimate.info.officialLabel || costEstimate.info.name) || modelId,
+    dynamicCatalogSize: dynamicCatalog ? (dynamicCatalog.models || []).length : 0,
+    localTokens,
+    localTokenSource,
+    realSamples: stats.realSamples || 0,
     accountCount: accs.length,
     requestCount: stats.totalRequests || 0,
     sparkPayload,
@@ -59,6 +89,8 @@ function getPlusPanelLiveData({ stats, pricing, bundleAccounts }) {
 
 function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInjected, autoReplyEnabled, autoReplyText, autoReplyDelaySec, saveTokenMode, autoQuotaSwitch, autoQuotaThreshold, bundleAccounts }) {
   const live = getPlusPanelLiveData({ stats, pricing, bundleAccounts });
+  const switchAccounts = (Array.isArray(bundleAccounts) ? bundleAccounts : []).filter(a => a && a.email).map(a => ({ email: String(a.email), daily: a.daily, weekly: a.weekly, hasToken: !!(a.sessionToken || a.apiKey || a.accessToken || a.token), valid: a.valid !== false, frozen: isWeeklyQuotaFrozen(a) }));
+  const switchAccountsJson = JSON.stringify(switchAccounts).replace(/</g, '\\u003c');
   const { heroTotalCost, heroTotalTokens, aggregateDailyUsd, aggregateDailyTokens, totalCost, localTokens, accountCount, requestCount, sparkTitle, sparkHtml, trend, trendClass, recentCount, recentAvg, recentMax, sparkLastLabel, sparkLastVal } = live;
 
   const css = `
@@ -109,6 +141,10 @@ function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInject
     .btn-primary:hover{filter:brightness(1.08);background:linear-gradient(135deg,#6366f1,#8b5cf6)}
     .btn-primary .ic{color:#fff}
     .btn-row{padding-left:8px;display:flex;flex-direction:column;gap:8px}
+    .quick-groups{display:flex;flex-direction:column;gap:10px;padding-left:8px}
+    .quick-section{border:1px solid rgba(148,163,184,.1);background:rgba(15,23,42,.35);border-radius:12px;padding:10px}
+    .quick-label{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-bottom:8px}
+    .quick-section .grid-2{padding-left:0}
     .switch-row{display:flex;align-items:center;gap:10px;padding:10px 11px;border-radius:10px;background:rgba(15,23,42,.5);border:1px solid rgba(148,163,184,.1);margin-left:8px;margin-bottom:8px;cursor:pointer}
     .switch{width:36px;height:20px;border-radius:999px;background:rgba(148,163,184,.25);position:relative;flex:0 0 36px;transition:background .2s}
     .switch.on{background:linear-gradient(135deg,#6366f1,#8b5cf6)}
@@ -139,6 +175,16 @@ function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInject
     .range-row{display:flex;align-items:center;gap:10px}
     .range-row input[type=range]{flex:1;accent-color:#8b5cf6}
     .range-row .v{min-width:42px;text-align:right;color:#fff;font-weight:700;font-size:13px}
+    .modal.wide{max-width:460px}
+    .field textarea{min-height:118px;resize:vertical}
+    .account-list{display:flex;flex-direction:column;gap:8px;max-height:300px;overflow:auto;margin-top:8px}
+    .account-option{width:100%;border:1px solid rgba(148,163,184,.14);background:rgba(15,23,42,.56);border-radius:10px;padding:10px 11px;color:#e2e8f0;cursor:pointer;text-align:left}
+    .account-option:hover{border-color:rgba(139,92,246,.55);background:rgba(99,102,241,.13)}
+    .account-option.disabled{opacity:.55;cursor:not-allowed}
+    .account-option.disabled:hover{border-color:rgba(148,163,184,.14);background:rgba(15,23,42,.56);transform:none}
+    .account-option b{display:block;color:#fff;font-size:12px;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .account-option span{font-size:10.5px;color:#94a3b8}
+    .mini-log{font-size:10.5px;color:#94a3b8;margin-top:8px;min-height:16px}
   `;
 
   const html = [
@@ -158,28 +204,46 @@ function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInject
         '<div class="hero-value" id="plus-hero-cost">', fmtUsd(heroTotalCost), '<span class="unit" id="plus-hero-tokens">  ', fmtToken(heroTotalTokens), ' tok</span></div>',
         '<div class="hero-meta">',
           '<span>池估 <b id="plus-pool-usd">', fmtUsd(aggregateDailyUsd), '</b> / <b id="plus-pool-tokens">', fmtToken(aggregateDailyTokens), '</b> tok</span>',
-          '<span>伴生 <b id="plus-local-usd">', fmtUsd(totalCost), '</b> / <b id="plus-local-tokens">', fmtToken(localTokens), '</b> tok</span>',
+          '<span>伴生', (live.localTokenSource === 'real' ? '真实' : '估算'), ' <b id="plus-local-usd">', fmtUsd(totalCost), '</b> / <b id="plus-local-tokens">', fmtToken(localTokens), '</b> tok</span>',
           '<span><b id="plus-account-count">', accountCount, '</b> 账号  <b id="plus-request-count">', requestCount, '</b> 次请求</span>',
+          (live.localTokenSource === 'real' ? '<span>真实样本 <b>' + Number(live.realSamples || 0) + '</b> 条</span>' : ''),
         '</div>',
+        (live.costSource !== 'blended'
+          ? '<div class="hero-meta" style="margin-top:6px"><span title="数据来源：' + (live.costSource === 'windsurf-config' ? 'Windsurf 本机缓存的官方 ClientModelConfig' : '内置模型价格表') + '">' + (live.costSource === 'windsurf-config' ? '官方价' : '模型价') + ' · ' + escapeHtml(String(live.officialModelLabel || '')) + '</span>'
+            + '<span>Input <b>$' + Number(live.officialPriceInput || 0).toFixed(2) + '</b>/1M</span>'
+            + '<span>Cached <b>$' + Number(live.officialPriceCached || 0).toFixed(2) + '</b>/1M</span>'
+            + '<span>Output <b>$' + Number(live.officialPriceOutput || 0).toFixed(2) + '</b>/1M</span>'
+            + (live.officialCreditMultiplier != null ? '<span>credit × <b>' + live.officialCreditMultiplier + '</b></span>' : '')
+            + (live.dynamicCatalogSize ? '<span>价表 ' + live.dynamicCatalogSize + ' 条</span>' : '')
+            + '</div>'
+          : '<div class="hero-meta" style="margin-top:6px"><span title="尚未加载 Windsurf 本机官方价格，按估算 blended 价计算">估算价 · blended <b>' + Number(live.blendedPer1M || 0).toFixed(3) + '</b> $/1M</span></div>'),
         '<div class="hero-cta"><button class="btn btn-primary" onclick="send(\'showTokenUsageStats\')"><span class="ic">', ICONS.chart, '</span>打开 Token 详情</button></div>',
       '</div>',
       renderSparkCard(live.sparkPayload),
     '</div></div>',
 
-    '<div class="card accent-purple"><div class="card-head"><div><div class="card-title">原版快捷入口</div><div class="card-sub">桥接 wfSwitch.* 命令</div></div>',
+    '<div class="card accent-purple"><div class="card-head"><div><div class="card-title">切号快捷入口</div><div class="card-sub">Zen 优先，原版桥保留刷新和回退</div></div>',
       '<div class="icon-btn" title="打开原版面板" onclick="send(\'focusOriginalPanel\')"><span class="ic">', ICONS.window, '</span></div>',
     '</div>',
-      '<div class="grid-2">',
-        '<button class="btn" onclick="send(\'switch\')"><span class="ic">', ICONS.swap, '</span>一键换号</button>',
-        '<button class="btn" onclick="send(\'activate\')"><span class="ic">', ICONS.key, '</span>输入激活码</button>',
-        '<button class="btn" onclick="send(\'newInstance\')"><span class="ic">', ICONS.window, '</span>新建窗口</button>',
-        '<button class="btn" onclick="send(\'openSettings\')"><span class="ic">', ICONS.cog, '</span>服务设置</button>',
-        '<button class="btn" onclick="send(\'openAccountsOverview\')"><span class="ic">', ICONS.users, '</span>账号总览</button>',
-        '<button class="btn" onclick="send(\'checkOriginalUpdate\')"><span class="ic">', ICONS.package, '</span>检查更新</button>',
+      '<div class="quick-groups">',
+        '<div class="quick-section"><div class="quick-label">Zen 无感快切</div><div class="grid-2">',
+          '<button class="btn btn-primary" onclick="send(\'fastSwitchBest\')"><span class="ic">', ICONS.bolt, '</span>切到最高额度</button>',
+          '<button class="btn" onclick="openSwitchModal()"><span class="ic">', ICONS.users, '</span>选择账号</button>',
+        '</div></div>',
+        '<div class="quick-section"><div class="quick-label">原版桥操作</div><div class="grid-2">',
+          '<button class="btn" onclick="send(\'switch\')"><span class="ic">', ICONS.swap, '</span>原版一键换号</button>',
+          '<button class="btn" onclick="send(\'refreshAccountsViaBridge\')"><span class="ic">', ICONS.refresh, '</span>刷新账号</button>',
+        '</div></div>',
+        '<div class="quick-section"><div class="quick-label">账号工具</div><div class="grid-2">',
+          '<button class="btn" onclick="send(\'openAccountsOverview\')"><span class="ic">', ICONS.users, '</span>账号总览</button>',
+          '<button class="btn" onclick="openActivateModal()"><span class="ic">', ICONS.key, '</span>批量激活码</button>',
+          '<button class="btn" onclick="send(\'newInstance\')"><span class="ic">', ICONS.window, '</span>新建窗口</button>',
+          '<button class="btn" onclick="send(\'openSettings\')"><span class="ic">', ICONS.cog, '</span>服务设置</button>',
+          '<button class="btn" onclick="send(\'checkOriginalUpdate\')"><span class="ic">', ICONS.package, '</span>检查更新</button>',
+        '</div></div>',
       '</div>',
       '<div class="switch-row" onclick="send(\'toggleAutoQuotaSwitch\')" style="margin-top:10px;margin-left:0"><div class="switch ', (autoQuotaSwitch ? 'on' : ''), '"></div><div class="switch-text"><b>无感切号（按日额度）</b><div class="meta">阈值 ', autoQuotaThreshold, '%  ', (autoQuotaSwitch ? '后台监控中' : '已关闭'), '  <a class="link" onclick="event.stopPropagation();send(\'setQuotaThreshold\')">改阈值</a></div></div></div>',
-      '<div class="switch-row" onclick="send(\'toggleSaveToken\')" style="margin-left:0"><div class="switch ', (saveTokenMode ? 'on' : ''), '"></div><div class="switch-text"><b>节约 Token 模式</b><div class="meta">', (saveTokenMode ? '全局规则只传短摘要 details' : '允许传完整 details（耗 token）'), '</div></div></div>',
-      '<div class="btn-row" style="margin-top:4px"><button class="btn" onclick="send(\'smartSwitch\')"><span class="ic">', ICONS.bolt, '</span>立即按日额度切号</button><button class="btn" onclick="send(\'refreshAccountsViaBridge\')"><span class="ic">', ICONS.refresh, '</span>调用原版刷新</button></div>',
+      '<div class="switch-row" onclick="send(\'toggleSaveToken\')" style="margin-left:0"><div class="switch ', (saveTokenMode ? 'on' : ''), '"></div><div class="switch-text"><b>节约 Token 模式</b><div class="meta">', (saveTokenMode ? '精简全局规则，并截断长 details' : '允许传完整 details（耗 token）'), '</div></div></div>',
     '</div>',
 
     '<div class="card accent-blue"><div class="card-head"><div><div class="card-title">持续对话</div><div class="card-sub">仅脚本触发会自动提交</div></div></div>',
@@ -202,6 +266,7 @@ function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInject
         '<button class="btn" onclick="send(\'selfCheck\')"><span class="ic">', ICONS.sparkle, '</span>自检报告</button>',
         '<button class="btn" onclick="send(\'copyClaudeContextMcpConfig\')"><span class="ic">', ICONS.copy, '</span>复制 MCP 模板</button>',
         '<button class="btn" onclick="send(\'resetTokenUsageStats\')"><span class="ic">', ICONS.refresh, '</span>重置 Token 统计</button>',
+        '<button class="btn" onclick="send(\'refreshModelCatalog\')"><span class="ic">', ICONS.refresh, '</span>同步官方价格</button>',
       '</div></div>',
     '</div>',
 
@@ -217,8 +282,29 @@ function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInject
       '</div>',
     '</div>',
 
+    '<div id="activateModal" class="modal-mask" onclick="if(event.target===this)closeActivateModal()">',
+      '<div class="modal wide">',
+        '<div class="modal-title">', ICONS.key, '批量输入激活码</div>',
+        '<div class="modal-sub">每行一个激活码。会通过伴生桥逐条调用原版 activateCdk，不再弹原版输入框。</div>',
+        '<div class="field"><label>激活码列表</label><textarea id="activationCodes" placeholder="WF-XXXX-XXXX-XXXX-XXXX\nWF-YYYY-YYYY-YYYY-YYYY"></textarea><div class="hint">首次使用若提示 activateCdk 不可用，请点击重新注入桥并重载窗口。</div></div>',
+        '<div id="activationLog" class="mini-log"></div>',
+        '<div class="modal-actions"><button class="btn" onclick="closeActivateModal()">取消</button><button class="btn btn-primary" onclick="submitActivationCodes()"><span class="ic">', ICONS.sparkle, '</span>批量提交</button></div>',
+      '</div>',
+    '</div>',
+
+    '<div id="switchModal" class="modal-mask" onclick="if(event.target===this)closeSwitchModal()">',
+      '<div class="modal wide">',
+        '<div class="modal-title">', ICONS.bolt, 'Zen 快速切号</div>',
+        '<div class="modal-sub">选择一个已捕获 token 的账号，底层直接调用 Windsurf loginWithAuthToken，不主动重载窗口。</div>',
+        '<div id="switchAccountList" class="account-list"></div>',
+        '<div id="switchLog" class="mini-log"></div>',
+        '<div class="modal-actions"><button class="btn" onclick="closeSwitchModal()">关闭</button><button class="btn btn-primary" onclick="send(\'fastSwitchBest\');closeSwitchModal()"><span class="ic">', ICONS.sparkle, '</span>切到最高额度</button></div>',
+      '</div>',
+    '</div>',
+
     '<script>',
     'const vscode=acquireVsCodeApi();',
+    'const switchAccounts=', switchAccountsJson, ';',
     'function send(t,p){vscode.postMessage(Object.assign({type:t},p||{}));}',
     'function fmtUsd(v){return "$"+Number(v||0).toFixed(2);}',
     'function fmtTok(v){const n=Number(v||0);if(n>=1e6)return(n/1e6).toFixed(2)+"M";if(n>=1000)return(n/1000).toFixed(1)+"K";return String(Math.round(n));}',
@@ -229,7 +315,15 @@ function getPlusPanelHtml({ stats, pricing, pkg, originalInstalled, bridgeInject
     'function openPhraseModal(){document.getElementById("phraseModal").classList.add("show");setTimeout(()=>document.getElementById("phraseInput").focus(),60);}',
     'function closePhraseModal(){document.getElementById("phraseModal").classList.remove("show");}',
     'function savePhrase(){const text=document.getElementById("phraseInput").value.trim();const delay=Number(document.getElementById("delayInput").value)||0;if(!text){return;}send("savePhrase",{text:text,delay:delay});closePhraseModal();}',
-    'document.addEventListener("keydown",e=>{if(e.key==="Escape")closePhraseModal();});',
+    "function openActivateModal(){document.getElementById(\"activateModal\").classList.add(\"show\");setTimeout(()=>document.getElementById(\"activationCodes\").focus(),60);}",
+    "function closeActivateModal(){document.getElementById(\"activateModal\").classList.remove(\"show\");}",
+    "function submitActivationCodes(){const raw=document.getElementById(\"activationCodes\").value||\"\";const codes=Array.from(new Set(raw.split(/[\\s,，;；]+/).map(v=>v.trim()).filter(Boolean)));if(!codes.length){document.getElementById(\"activationLog\").textContent=\"请先输入激活码\";return;}document.getElementById(\"activationLog\").textContent=\"已提交 \"+codes.length+\" 条，后台逐条处理\";send(\"batchActivateCodes\",{codes:codes});closeActivateModal();}",
+    "function escClient(v){return String(v||\"\").replace(/[&<>\\\"]/g,c=>({\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",\"\\\\\\\"\":\"&quot;\"}[c]||c));}",
+    "function openSwitchModal(){document.getElementById(\"switchModal\").classList.add(\"show\");renderSwitchAccounts();}",
+    "function closeSwitchModal(){document.getElementById(\"switchModal\").classList.remove(\"show\");}",
+    "function renderSwitchAccounts(){const box=document.getElementById(\"switchAccountList\");const list=(switchAccounts||[]).filter(a=>a&&a.valid!==false);if(!list.length){box.innerHTML=\"<div class=\\\"mini-log\\\">暂无账号，请先刷新或注入伴生桥。</div>\";return;}box.innerHTML=list.map(a=>{const frozen=!!a.frozen;const state=frozen?\"周额度冻结\":(a.hasToken?\"可 Zen 快切\":\"缺少 token\");const click=frozen?\"\":(\" onclick=\\\"fastSwitchEmail('\"+escClient(a.email).replace(/'/g,\"&#39;\")+\"')\\\"\");return \"<button class=\\\"account-option \"+(frozen?\"disabled\":\"\")+\"\\\"\"+click+\"><b>\"+escClient(a.email)+\"</b><span>日 \"+(a.daily??\"--\")+\"%  周 \"+(a.weekly??\"--\")+\"%  \"+state+\"</span></button>\";}).join(\"\");}",
+    "function fastSwitchEmail(email){document.getElementById(\"switchLog\").textContent=\"正在快速切换 \"+email+\" \";send(\"fastSwitchToEmail\",{email:email});closeSwitchModal();}",
+    'document.addEventListener("keydown",e=>{if(e.key==="Escape"){closePhraseModal();closeActivateModal();closeSwitchModal();}});',
     '</script>',
     '</body></html>'
   ].join('');

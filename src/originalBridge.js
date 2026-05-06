@@ -4,7 +4,7 @@ const fsSync = require('fs');
 const path = require('path');
 
 const ORIGINAL_ID = 'xy.wf-switch-ext';
-const BRIDGE_VERSION = 2;
+const BRIDGE_VERSION = 3;
 const BEGIN = '/* WF_PLUS_BRIDGE_BEGIN_v' + BRIDGE_VERSION + ' */';
 const END = '/* WF_PLUS_BRIDGE_END_v' + BRIDGE_VERSION + ' */';
 // 任意旧版本都用同一个匹配前缀清理
@@ -63,6 +63,8 @@ function buildBridgeSnippet() {
     '        } catch (e) { _wfWriteReply({ action: action, ok: false, error: e && e.message }); }',
     '      } else if (action === "doSwitch") {',
     '        try { if (typeof doSwitch === "function") { Promise.resolve(doSwitch(req.email || undefined, req.opts || {})).then(function(){ _wfWriteReply({ action: action, ok: true }); }, function(e){ _wfWriteReply({ action: action, ok: false, error: e && e.message }); }); } else { _wfWriteReply({ action: action, ok: false, error: "doSwitch 不可用" }); } } catch (e) { _wfWriteReply({ action: action, ok: false, error: e && e.message }); }',
+    '      } else if (action === "activateCdk" && req.code) {',
+    '        try { if (typeof activateCdk === "function") { Promise.resolve(activateCdk(String(req.code).trim())).then(function(r){ _wfWriteReply({ action: action, ok: true, result: r }); }, function(e){ _wfWriteReply({ action: action, ok: false, error: e && e.message }); }); } else { _wfWriteReply({ action: action, ok: false, error: "activateCdk 不可用" }); } } catch (e) { _wfWriteReply({ action: action, ok: false, error: e && e.message }); }',
     '      }',
     '    } catch (e) {}',
     '  }, 800);',

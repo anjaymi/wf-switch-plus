@@ -103,7 +103,16 @@ function getModelInfo(modelId) {
   const id = normalizeModelId(modelId);
   if (!id) return null;
   const info = MODELS[id] || null;
-  return info ? Object.assign({ id }, info) : { id, name: modelId, provider: 'unknown', credit: 1 };
+  const base = info ? Object.assign({ id }, info) : { id, name: modelId, provider: 'unknown', credit: 1 };
+  // 合并 Windsurf 官方动态价格（如果已加载）
+  const dyn = typeof getDynamicPrice === 'function' ? getDynamicPrice(id) : null;
+  if (dyn) {
+    base.officialPrice = dyn;
+    if (dyn.label) base.officialLabel = dyn.label;
+    if (dyn.modelUid) base.modelUid = dyn.modelUid;
+    if (dyn.creditMultiplier != null) base.officialCredit = dyn.creditMultiplier;
+  }
+  return base;
 }
 
 function getAllModels() {
@@ -184,16 +193,119 @@ function detectCurrentModel() {
 
 function estimateModelCost(tokens, modelId, mix) {
   const info = getModelInfo(modelId);
-  const price = info && info.price;
   const n = Number(tokens || 0);
-  if (!price) return { known: false, cost: 0, info };
+  // 优先使用 Windsurf 官方动态价格表（来自 windsurfConfigurations）
+  const dyn = getDynamicPrice(modelId);
+  const price = dyn || (info && info.price);
+  if (!price) return { known: false, cost: 0, info, source: 'unknown' };
   const mc = mix && typeof mix.cached === 'number' ? mix.cached : 0.5;
   const mi = mix && typeof mix.input === 'number' ? mix.input : 0.3;
   const mo = mix && typeof mix.output === 'number' ? mix.output : 0.2;
   const sum = mc + mi + mo || 1;
   const blended = (mc / sum) * price.cachedPer1M + (mi / sum) * price.inputPer1M + (mo / sum) * price.outputPer1M;
-  return { known: true, cost: n * blended / 1000000, blendedPer1M: blended, info };
+  return {
+    known: true,
+    cost: n * blended / 1000000,
+    blendedPer1M: blended,
+    inputPer1M: price.inputPer1M,
+    cachedPer1M: price.cachedPer1M,
+    outputPer1M: price.outputPer1M,
+    creditMultiplier: price.creditMultiplier == null ? (info && info.credit) : price.creditMultiplier,
+    officialLabel: price.label || (info && info.name) || modelId,
+    modelUid: price.modelUid || modelId,
+    denominator: price.denominator || '1M tokens',
+    info,
+    source: dyn ? 'windsurf-config' : 'static',
+  };
 }
 
-module.exports = { BASE_PRICE, getAllModels, getModelInfo, detectCurrentModel, estimateModelCost, normalizeModelId };
+// ===== Windsurf 官方动态价格表 =====
+// 通过解析 state.vscdb -> windsurfConfigurations 得到的真实 ClientModelConfig 列表。
+// 启动时由 extension 异步刷新；查询时优先动态、回落静态硬编码。
+let _dynamicCatalog = null;
+
+function setDynamicCatalog(catalog) {
+  if (catalog && Array.isArray(catalog.models)) {
+    _dynamicCatalog = catalog;
+  } else {
+    _dynamicCatalog = null;
+  }
+}
+
+function getDynamicCatalog() {
+  return _dynamicCatalog;
+}
+
+function findDynamicEntry(modelIdOrUidOrLabel) {
+  if (!_dynamicCatalog) return null;
+  const key = String(modelIdOrUidOrLabel || '');
+  if (!key) return null;
+  if (_dynamicCatalog.byUid && _dynamicCatalog.byUid[key]) return _dynamicCatalog.byUid[key];
+  if (_dynamicCatalog.byLabel && _dynamicCatalog.byLabel[key]) return _dynamicCatalog.byLabel[key];
+  // 静态 id 兜底：把 dotted/aliased 转成 Windsurf 风格 uid（点 -> 连字符）
+  const normalized = normalizeModelId(key);
+  if (!normalized) return null;
+  const uidGuess = normalized.replace(/\./g, '-');
+  if (_dynamicCatalog.byUid && _dynamicCatalog.byUid[uidGuess]) return _dynamicCatalog.byUid[uidGuess];
+  // 反向尝试：把连字符还原成点
+  const dotted = normalized.replace(/-(?=\d)/g, '.');
+  if (_dynamicCatalog.byUid && _dynamicCatalog.byUid[dotted]) return _dynamicCatalog.byUid[dotted];
+  return null;
+}
+
+function getDynamicPrice(modelIdOrUid) {
+  const entry = findDynamicEntry(modelIdOrUid);
+  if (!entry || !entry.cost) return null;
+  const { input, cachedInput, output, denominator } = entry.cost;
+  if (input == null && cachedInput == null && output == null) return null;
+  return {
+    inputPer1M: Number(input || 0),
+    cachedPer1M: Number(cachedInput || 0),
+    outputPer1M: Number(output || 0),
+    denominator: denominator || '1M tokens',
+    creditMultiplier: entry.creditMultiplier == null ? null : Number(entry.creditMultiplier),
+    source: 'windsurf-config',
+    label: entry.label || '',
+    modelUid: entry.modelUid || '',
+  };
+}
+
+// 异步从本机 Windsurf 状态读取并解析动态价格表，刷新内存缓存。
+// 返回 { ok, models, source, error }
+async function refreshDynamicCatalog() {
+  let readItemTableKeys, asBuffer, parseWindsurfConfigurations;
+  try {
+    ({ readItemTableKeys, asBuffer } = require('./windsurfState'));
+    ({ parseWindsurfConfigurations } = require('./windsurfPricing'));
+  } catch (e) {
+    return { ok: false, models: 0, error: 'modules unavailable: ' + e.message };
+  }
+  try {
+    const { stateFile, values } = await readItemTableKeys(['windsurfConfigurations']);
+    if (!stateFile) return { ok: false, models: 0, error: 'state.vscdb not found' };
+    const buf = asBuffer(values['windsurfConfigurations']);
+    if (!buf || !buf.length) return { ok: false, models: 0, error: 'windsurfConfigurations empty' };
+    const catalog = parseWindsurfConfigurations(buf);
+    catalog.stateFile = stateFile;
+    setDynamicCatalog(catalog);
+    return { ok: true, models: catalog.models.length, source: stateFile };
+  } catch (e) {
+    return { ok: false, models: 0, error: e.message || String(e) };
+  }
+}
+
+module.exports = {
+  BASE_PRICE,
+  getAllModels,
+  getModelInfo,
+  detectCurrentModel,
+  estimateModelCost,
+  normalizeModelId,
+  // dynamic catalog（windsurfConfigurations 解析得到的官方价格）
+  refreshDynamicCatalog,
+  setDynamicCatalog,
+  getDynamicCatalog,
+  getDynamicPrice,
+  findDynamicEntry,
+};
 

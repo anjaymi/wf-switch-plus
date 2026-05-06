@@ -1,4 +1,5 @@
 ﻿const { escapeHtml, escapeAttrArg } = require('./shared/htmlEscape');
+const { isWeeklyQuotaFrozen } = require('./domain/accountSelector');
 function fmtPct(value) {
   if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) return '--';
   return Math.max(0, Math.min(100, Math.round(Number(value)))) + '%';
@@ -40,7 +41,8 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     if (bd !== ad) return bd - ad;
     return Number(b && (b.lastLiveAt || b.sessionRefreshedAt) || 0) - Number(a && (a.lastLiveAt || a.sessionRefreshedAt) || 0);
   });
-  const bestEmail = accounts.length && accounts[0].daily !== undefined ? accounts[0].email : '';
+  const best = accounts.find(a => a && a.daily !== undefined && !isWeeklyQuotaFrozen(a));
+  const bestEmail = best ? best.email : '';
 
   const rows = accounts.map((a) => {
     const email = a && a.email ? String(a.email) : '';
@@ -51,18 +53,20 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     const planEnd = a.planEndUnix ? a.planEndUnix * 1000 : 0;
     const lastLive = a.lastLiveAt || a.sessionRefreshedAt || 0;
     const valid = (a.valid !== false);
+    const frozen = isWeeklyQuotaFrozen(a);
     const isCurrent = email && currentEmail && email.toLowerCase() === String(currentEmail).toLowerCase();
     const emailArg = escapeAttrArg(email);
     const dColor = daily === null ? '#475569' : (daily >= 60 ? '#22c55e' : daily >= 25 ? '#f59e0b' : '#ef4444');
     const wColor = weekly === null ? '#475569' : (weekly >= 60 ? '#22c55e' : weekly >= 25 ? '#f59e0b' : '#ef4444');
     const planEndStr = planEnd ? '订阅到期 ' + new Date(planEnd).toLocaleDateString('zh-CN') : '';
-    const isBest = bestEmail && email === bestEmail && !isCurrent && daily !== null;
+    const isBest = bestEmail && email === bestEmail && !isCurrent && daily !== null && !frozen;
     return `
-      <div class="acc ${isCurrent ? 'current' : ''} ${!valid ? 'invalid' : ''}">
+      <div class="acc ${isCurrent ? 'current' : ''} ${!valid ? 'invalid' : ''} ${frozen ? 'frozen' : ''}">
         <div class="acc-main">
           <div class="acc-email">${escapeHtml(email)}
             ${isCurrent ? '<span class="badge badge-cur">当前账号</span>' : ''}
             ${isBest ? '<span class="badge badge-best">日额度最高</span>' : ''}
+            ${frozen ? '<span class="badge badge-frozen">周额度冻结</span>' : ''}
             ${!valid ? '<span class="badge badge-bad">异常</span>' : ''}
           </div>
           <div class="acc-meta">${planName ? '套餐 ' + escapeHtml(planName) : ''}${planName && planEndStr ? '  ' : ''}${planEndStr}${lastLive ? '  上次活动 ' + relTime(lastLive) : ''}</div>
@@ -72,7 +76,7 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
           <div class="qrow"><span class="qlbl">周额度</span><span class="qval" style="color:${wColor}">${fmtPct(weekly)}</span>${quotaBar(weekly, wColor)}</div>
         </div>
         <div class="acc-actions">
-          ${isCurrent ? '' : `<button class="btn-mini btn-primary" onclick="send('switchTo', ${emailArg})">切换到</button>`}
+          ${isCurrent ? '' : (frozen ? '<button class="btn-mini" disabled>已冻结</button>' : `<button class="btn-mini btn-primary" onclick="send('switchTo', ${emailArg})">切换到</button>`)}
           <button class="btn-mini" onclick="send('viewToken', ${emailArg})">查看 Token</button>
           <button class="btn-mini" onclick="send('copyToken', ${emailArg})">复制 Token</button>
           <button class="btn-mini" onclick="send('copyEmail', ${emailArg})">复制邮箱</button>
@@ -113,10 +117,12 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     .acc:hover{border-color:rgba(139,92,246,.4)}
     .acc.current{border-color:rgba(139,92,246,.6);background:linear-gradient(180deg,rgba(99,102,241,.16),rgba(15,23,42,.55))}
     .acc.invalid{opacity:.7}
+    .acc.frozen{opacity:.72;border-color:rgba(239,68,68,.28)}
     .acc-email{font-size:14px;font-weight:700;color:#fff;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
     .badge{font-size:10px;padding:2px 7px;border-radius:999px;font-weight:600}
     .badge-cur{background:rgba(139,92,246,.25);color:#c4b5fd;border:1px solid rgba(139,92,246,.45)}
     .badge-best{background:rgba(34,197,94,.2);color:#86efac;border:1px solid rgba(34,197,94,.4)}
+    .badge-frozen{background:rgba(239,68,68,.18);color:#fca5a5;border:1px solid rgba(239,68,68,.35)}
     .badge-bad{background:rgba(239,68,68,.18);color:#fca5a5;border:1px solid rgba(239,68,68,.35)}
     .acc-meta{font-size:11px;color:#94a3b8;margin-top:4px}
     .acc-quotas{display:flex;flex-direction:column;gap:6px;min-width:180px}
@@ -128,7 +134,9 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     .qbar.empty>span{width:0}
     .acc-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
     .btn-mini{appearance:none;border:1px solid rgba(148,163,184,.2);background:rgba(15,23,42,.5);color:#cbd5e1;border-radius:7px;padding:6px 12px;font-size:11px;cursor:pointer;font-weight:500;transition:all .15s}
+    .btn-mini:disabled{opacity:.55;cursor:not-allowed}
     .btn-mini:hover{border-color:#6366f1;color:#fff}
+    .btn-mini:disabled:hover{border-color:rgba(148,163,184,.2);color:#cbd5e1}
     .btn-mini.btn-primary{background:linear-gradient(135deg,#6366f1,#8b5cf6);border-color:transparent;color:#fff;font-weight:600}
     .empty{text-align:center;padding:52px 20px;border:1px dashed rgba(148,163,184,.25);border-radius:16px;color:#94a3b8;font-size:13px;line-height:1.7}
     .empty b{color:#fff;font-weight:600}

@@ -54,6 +54,26 @@ function buildWfContinueGlobalRule() {
   const commandLine = savePoints
     ? 'chcp 65001 2>$null; powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\\wf-switch-continue\\wf-switch-continue.ps1" -reason "<10到20字中文摘要>" -details "短摘要" -workspace "$PWD"'
     : 'chcp 65001 2>$null; powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\\wf-switch-continue\\wf-switch-continue.ps1" -reason "<简短原因>" -details "<详细输出内容>" -workspace "$PWD"';
+  if (savePoints) {
+    return `# PRIORITY RULE - wf-switch-continue (MANDATORY)
+
+Before ending every response, run and wait for:
+
+\`\`\`
+${commandLine}
+\`\`\`
+
+Rules:
+- Use Chinese and keep replies concise.
+- \`-reason\` must be a short Chinese summary, not a generic placeholder.
+- Keep \`-details\` as \`短摘要\` unless critical safety information would be lost.
+- Do not paste long logs, diffs, full files, or base64 unless the user asks.
+- Prefer short progress updates; store durable project context in memory/rules when needed.
+- After code changes, run available syntax/build/package checks.
+- If script output contains \`--- BEGIN USER INSTRUCTION ---\`, execute that instruction immediately in the same conversation.
+- If the user chooses End, provide only a short status summary and stop.
+`;
+  }
   const detailsRule = savePoints
     ? '- Keep the `-details` value extremely short by default, such as "短摘要", to reduce extra context/token usage. Only put longer content in `-details` when the user explicitly asks for a detailed report or when critical safety information would be lost.'
     : '- The `-details` value must be Markdown describing what was done, findings, and anything the user should know.';

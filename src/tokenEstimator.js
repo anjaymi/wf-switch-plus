@@ -28,7 +28,8 @@ function getCurrentModelState(stats, pricing) {
     cachedModelAt = now;
   }
   const modelId = cachedModelState && cachedModelState.id || '';
-  const cost = estimateModelCost(stats && stats.totalEstimatedTokens || 0, modelId, {
+  const tokenTotal = stats && (stats.totalRealTokens || stats.totalEstimatedTokens) || 0;
+  const cost = estimateModelCost(tokenTotal, modelId, {
     cached: pricing.mixCached,
     input: pricing.mixInput,
     output: pricing.mixOutput,
@@ -37,6 +38,16 @@ function getCurrentModelState(stats, pricing) {
     costKnown: !!(cost && cost.known),
     estimatedCost: cost && cost.cost || 0,
     blendedPer1M: cost && cost.blendedPer1M || 0,
+    costSource: cost && cost.source || 'unknown',
+    price: cost && cost.known ? {
+      inputPer1M: cost.inputPer1M || 0,
+      cachedPer1M: cost.cachedPer1M || 0,
+      outputPer1M: cost.outputPer1M || 0,
+      creditMultiplier: cost.creditMultiplier,
+      officialLabel: cost.officialLabel || '',
+      modelUid: cost.modelUid || modelId,
+      denominator: cost.denominator || '1M tokens',
+    } : null,
   });
 }
 
@@ -92,13 +103,17 @@ function getTokenUsageDefault() {
     version: 1,
     totalRequests: 0,
     totalEstimatedTokens: 0,
-    totalSavedTokens: 0,
+    totalRealTokens: 0,
+    realSamples: 0,
+    realOffsets: {},
     totalDetailsTokens: 0,
     longDetailsCount: 0,
     highRiskCount: 0,
     lastAt: '',
     last: null,
+    lastReal: null,
     recent: [],
+    recentReal: [],
   };
 }
 
@@ -188,6 +203,46 @@ async function recordContinueTokenUsage(body = {}) {
   return item;
 }
 
+async function recordRealTokenUsage(body = {}) {
+  const total = Math.max(0, Number(body.total || 0));
+  if (!total) return null;
+  const cascadeId = String(body.cascadeId || '');
+  const offset = Math.max(0, Number(body.offset || 0));
+  const stats = readTokenUsageStatsSync();
+  stats.realOffsets = stats.realOffsets && typeof stats.realOffsets === 'object' ? stats.realOffsets : {};
+  let delta = total;
+  if (cascadeId) {
+    const prev = stats.realOffsets[cascadeId];
+    if (prev && Number(prev.offset || 0) === offset) {
+      const prevTotal = Math.max(0, Number(prev.total || 0));
+      if (total <= prevTotal) return null;
+      delta = total - prevTotal;
+    }
+  }
+  const item = {
+    at: new Date().toISOString(),
+    cascadeId,
+    offset,
+    total: delta,
+    rawTotal: total,
+    entryCount: Math.max(0, Number(body.entryCount || 0)),
+    aggregatedByField: body.aggregatedByField || {},
+    source: String(body.source || ''),
+    auto: !!body.auto,
+  };
+  if (cascadeId) {
+    stats.realOffsets[cascadeId] = { offset, total, at: item.at };
+  }
+  stats.totalRealTokens = Math.max(0, Number(stats.totalRealTokens || 0)) + delta;
+  stats.realSamples = Math.max(0, Number(stats.realSamples || 0)) + 1;
+  stats.lastReal = item;
+  stats.recentReal = [item, ...(Array.isArray(stats.recentReal) ? stats.recentReal : [])].slice(0, 50);
+  await writeTokenUsageStats(stats);
+  if (refreshPanel) refreshPanel();
+  try { renderDetail(); } catch {}
+  return item;
+}
+
 function buildTokenUsageSummary() {
   const stats = readTokenUsageStatsSync();
   const avg = stats.totalRequests ? Math.round(stats.totalEstimatedTokens / stats.totalRequests) : 0;
@@ -195,6 +250,7 @@ function buildTokenUsageSummary() {
   return [
     `请求次数: ${stats.totalRequests}`,
     `估算总 token: ${stats.totalEstimatedTokens}`,
+    `真实总 token: ${stats.totalRealTokens || 0}`,
     `估算节约 token: ${stats.totalSavedTokens}`,
     `平均每次: ${avg}`,
     `长 details 次数: ${stats.longDetailsCount}`,
@@ -239,8 +295,9 @@ async function showTokenUsageStats() {
           const _usedR = _avg===null ? 0 : Math.max(0,1-_avg/100);
           const _aggUsd = _usedR*(_p.dailyQuotaUsd||0)*_bAccs.length;
           const _aggTok = _usedR*_dq*_bAccs.length;
-          const _localCost = (_s.totalEstimatedTokens||0)*_p.blendedPer1M/1e6;
+          const _localTokens = (_s.totalRealTokens || _s.totalEstimatedTokens || 0);
           const _modelState = getCurrentModelState(_s, _p);
+          const _localCost = _modelState && _modelState.costKnown ? (_modelState.estimatedCost || 0) : _localTokens*_p.blendedPer1M/1e6;
           const _best = _bAccs.reduce((best, cur) => {
             const bd = best && best.daily !== undefined ? Number(best.daily) : -1;
             const cd = cur && cur.daily !== undefined ? Number(cur.daily) : -1;
@@ -248,14 +305,23 @@ async function showTokenUsageStats() {
           }, null);
           const _avgReq = _s.totalRequests ? Math.round((_s.totalEstimatedTokens||0) / _s.totalRequests) : 0;
           const _last = _s.last || null;
+          const _hasReal = !!(_s.totalRealTokens || 0);
+          const _realItems = Array.isArray(_s.recentReal) ? _s.recentReal.filter(r => r && Number(r.total) > 0) : [];
+          const _obsTotal = _hasReal ? (_s.totalRealTokens || 0) : (_s.totalEstimatedTokens || 0);
+          const _obsCount = _hasReal ? (_s.realSamples || _realItems.length || 0) : (_s.totalRequests || 0);
+          const _obsAvg = _hasReal && _obsCount ? Math.round(_obsTotal / _obsCount) : _avgReq;
+          const _obsLast = _hasReal ? (_s.lastReal || _realItems[0] || null) : _last;
+          const _obsLastTokens = _obsLast ? (_hasReal ? Number(_obsLast.total || 0) : Number(_obsLast.estimatedTokens || 0)) : 0;
           detailPanel.webview.postMessage({
             type:'liveUpdate',
             heroTotalCost: _localCost+_aggUsd,
-            heroTotalTokens: (_s.totalEstimatedTokens||0)+_aggTok,
+            heroTotalTokens: _localTokens+_aggTok,
             aggregateDailyUsd: _aggUsd,
             aggregateDailyTokens: _aggTok,
             localCost: _localCost,
-            localTokens: _s.totalEstimatedTokens||0,
+            localTokens: _localTokens,
+            hasRealTokens: !!(_s.totalRealTokens || 0),
+            realSamples: _s.realSamples || 0,
             accountCount: _bAccs.length,
             validAccountCount: _bAccs.filter(a => a.valid !== false).length,
             avgDaily: _avg===null?null:Math.round(_avg),
@@ -273,6 +339,15 @@ async function showTokenUsageStats() {
             lastTokens: _last ? (_last.estimatedTokens||0) : 0,
             lastDetailsTokens: _last ? (_last.detailsTokens||0) : 0,
             highRiskCount: _s.highRiskCount||0,
+            obsHasReal: _hasReal,
+            obsTotal: _obsTotal,
+            obsCount: _obsCount,
+            obsAvg: _obsAvg,
+            obsLastTokens: _obsLastTokens,
+            obsLastSub: _obsLast ? (_hasReal ? 'raw ' + (_obsLast.rawTotal || _obsLast.total || 0) + '  样本 ' + (_s.realSamples || 0) + ' 条' : 'details ' + (_obsLast.detailsTokens || 0) + '  高风险 ' + (_s.highRiskCount || 0) + ' 次') : '暂无记录',
+            obsRisk: _hasReal ? '真实样本' : (_last ? ({ low: '低风险', medium: '中风险', high: '高风险' }[_last.riskLevel] || '未知') : '无数据'),
+            obsRiskColor: _hasReal ? '#22c55e' : (_last ? ({ low: '#22c55e', medium: '#f59e0b', high: '#ef4444' }[_last.riskLevel] || '#94a3b8') : '#94a3b8'),
+            obsRiskSub: _hasReal ? '当前显示真实 Token 消耗样本' : (_last && _last.riskReasons && _last.riskReasons.length ? _last.riskReasons.join('，') : '当前上下文较轻'),
             model: _modelState,
           });
         } catch {}
@@ -403,4 +478,4 @@ function refreshDetailPanel() { try { renderDetail(); } catch {} }
 
 module.exports = {
   refreshDetailPanel,
-  setTokenRefreshHandler, setTokenContext, estimateTextTokens, estimateAttachmentTokens, estimateAttachmentsTokens, getTokenUsageDefault, readTokenUsageStatsSync, writeTokenUsageStats, recordContinueTokenUsage, buildTokenUsageSummary, showTokenUsageStats, resetTokenUsageStats, getQuotaBaselines, updateQuotaBaseline, updateQuotaBaselinesBulk, resetQuotaBaseline, getPricingConfig };
+  setTokenRefreshHandler, setTokenContext, estimateTextTokens, estimateAttachmentTokens, estimateAttachmentsTokens, getTokenUsageDefault, readTokenUsageStatsSync, writeTokenUsageStats, recordContinueTokenUsage, recordRealTokenUsage, buildTokenUsageSummary, showTokenUsageStats, resetTokenUsageStats, getQuotaBaselines, updateQuotaBaseline, updateQuotaBaselinesBulk, resetQuotaBaseline, getPricingConfig };

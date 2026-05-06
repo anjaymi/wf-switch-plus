@@ -36,10 +36,15 @@ function ringSvg(percent, color, label, sub, idPrefix) {
 }
 
 function getTokenDetailHtml({ stats, pricing, baselines, currentEmail, bundleAccounts, modelState }) {
-  const totalCost = stats.totalEstimatedTokens * pricing.blendedPer1M / 1_000_000;
   const model = modelState || {};
   const modelInfo = model.info || {};
-  const modelPrice = modelInfo.price || null;
+  const modelPrice = model.price || modelInfo.price || null;
+  const modelCredit = modelPrice && modelPrice.creditMultiplier !== undefined && modelPrice.creditMultiplier !== null
+    ? modelPrice.creditMultiplier
+    : modelInfo.credit;
+  const localTokens = stats.totalRealTokens || stats.totalEstimatedTokens || 0;
+  const totalCost = model.costKnown ? (model.estimatedCost || 0) : localTokens * pricing.blendedPer1M / 1_000_000;
+  const effectiveBlendedPer1M = model.costKnown ? (model.blendedPer1M || pricing.blendedPer1M) : pricing.blendedPer1M;
   const map = baselines || {};
   const accs = Array.isArray(bundleAccounts) ? bundleAccounts.filter(a => a && a.email) : [];
   const validAccs = accs.filter(a => a.valid !== false);
@@ -54,7 +59,7 @@ function getTokenDetailHtml({ stats, pricing, baselines, currentEmail, bundleAcc
   // 估算全账号累计美元（每个账号视为日额度 dailyQuotaUsd × 已用比例）
   const aggregateDailyUsd = avgDaily === null ? 0 : (totalDailyUsed / 100) * (pricing.dailyQuotaUsd || 0) * accs.length;
   const aggregateDailyTokens = avgDaily === null ? 0 : (totalDailyUsed / 100) * (pricing.dailyQuotaTokens || 0) * accs.length;
-  const heroTotalTokens = (stats.totalEstimatedTokens || 0) + aggregateDailyTokens;
+  const heroTotalTokens = localTokens + aggregateDailyTokens;
   const bestAcc = accs.reduce((best, cur) => {
     const bd = best && best.daily !== undefined ? Number(best.daily) : -1;
     const cd = cur.daily !== undefined ? Number(cur.daily) : -1;
@@ -72,10 +77,20 @@ function getTokenDetailHtml({ stats, pricing, baselines, currentEmail, bundleAcc
   const weeklyUsed = weeklyLeft === null ? 0 : Math.max(0, 100 - weeklyLeft);
   const last = stats.last || null;
   const avg = stats.totalRequests ? Math.round(stats.totalEstimatedTokens / stats.totalRequests) : 0;
+  const hasRealObs = !!(stats.totalRealTokens || 0);
+  const realItems = Array.isArray(stats.recentReal) ? stats.recentReal.filter(r => r && Number(r.total) > 0) : [];
+  const obsTotal = hasRealObs ? (stats.totalRealTokens || 0) : (stats.totalEstimatedTokens || 0);
+  const obsCount = hasRealObs ? (stats.realSamples || realItems.length || 0) : (stats.totalRequests || 0);
+  const obsAvg = hasRealObs && obsCount ? Math.round(obsTotal / obsCount) : avg;
+  const obsLast = hasRealObs ? (stats.lastReal || realItems[0] || null) : last;
+  const obsLastTokens = obsLast ? (hasRealObs ? Number(obsLast.total || 0) : Number(obsLast.estimatedTokens || 0)) : 0;
+  const obsLastSub = obsLast
+    ? (hasRealObs ? 'raw ' + fmtToken(obsLast.rawTotal || obsLast.total || 0) + '  样本 ' + (stats.realSamples || 0) + ' 条' : 'details ' + obsLast.detailsTokens + '  高风险 ' + (stats.highRiskCount || 0) + ' 次')
+    : '暂无记录';
   const riskMap = { low: '低风险', medium: '中风险', high: '高风险' };
   const riskColor = { low: '#22c55e', medium: '#f59e0b', high: '#ef4444' };
-  const lastRisk = last ? (riskMap[last.riskLevel] || '未知') : '无数据';
-  const lastRiskColor = last ? (riskColor[last.riskLevel] || '#94a3b8') : '#94a3b8';
+  const lastRisk = hasRealObs ? '真实样本' : (last ? (riskMap[last.riskLevel] || '未知') : '无数据');
+  const lastRiskColor = hasRealObs ? '#22c55e' : (last ? (riskColor[last.riskLevel] || '#94a3b8') : '#94a3b8');
 
   const css = `
     *{box-sizing:border-box}
@@ -165,9 +180,9 @@ function getTokenDetailHtml({ stats, pricing, baselines, currentEmail, bundleAcc
           <div class="hero-value" id="hv-total">${fmtUsd(totalCost + aggregateDailyUsd)}<span class="unit" id="hv-tok">  ${fmtToken(heroTotalTokens)} tok</span></div>
           <div class="hero-meta">
             <span>池估 <b id="hv-pool-usd">${fmtUsd(aggregateDailyUsd)}</b> / <b id="hv-pool-tok">${fmtToken(aggregateDailyTokens)}</b> tok</span>
-            <span>伴生 <b id="hv-local-usd">${fmtUsd(totalCost)}</b> / <b id="hv-local-tok">${fmtToken(stats.totalEstimatedTokens)}</b> tok</span>
+            <span>伴生${stats.totalRealTokens ? '真实' : '估算'} <b id="hv-local-usd">${fmtUsd(totalCost)}</b> / <b id="hv-local-tok">${fmtToken(localTokens)}</b> tok</span>
             <span><b id="hv-acc-cnt">${accs.length || accountCount}</b> 账号 · 平均日剩余 <b id="hv-avg-daily">${avgDaily===null?'--':avgDaily+'%'}</b></span>
-            <span><b id="hv-req-cnt">${stats.totalRequests || 0}</b> 次脚本请求 · blended <b>${pricing.blendedPer1M.toFixed(3)}</b> $/1M</span>
+            <span><b id="hv-req-cnt">${stats.totalRequests || 0}</b> 次脚本请求 · blended <b>${effectiveBlendedPer1M.toFixed(3)}</b> $/1M</span>
           </div>
         </div>
         <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap">
@@ -185,7 +200,7 @@ function getTokenDetailHtml({ stats, pricing, baselines, currentEmail, bundleAcc
       </div>
       <div class="grid-4">
         <div class="stat"><div class="stat-label">当前模型</div><div class="stat-value green" id="model-name" style="font-size:18px">${escapeHtml(modelInfo.name || model.id || '未捕获')}</div><div class="stat-sub" id="model-id">${escapeHtml(model.id || '未捕获当前选择，可点击手动设置')}</div></div>
-        <div class="stat"><div class="stat-label">权益倍率</div><div class="stat-value purple" id="model-credit">${modelInfo.credit !== undefined ? modelInfo.credit + 'x' : '--'}</div><div class="stat-sub" id="model-provider">${escapeHtml(modelInfo.provider || 'unknown')}</div></div>
+        <div class="stat"><div class="stat-label">权益倍率</div><div class="stat-value purple" id="model-credit">${modelCredit !== undefined && modelCredit !== null ? modelCredit + 'x' : '--'}</div><div class="stat-sub" id="model-provider">${escapeHtml(model.costSource === 'windsurf-config' ? 'windsurf-config' : (modelInfo.provider || 'unknown'))}</div></div>
         <div class="stat"><div class="stat-label">价格 / 1M Token</div><div class="stat-value usd" id="model-price">${modelPrice ? '$' + modelPrice.inputPer1M + ' / $' + modelPrice.cachedPer1M + ' / $' + modelPrice.outputPer1M : '待补'}</div><div class="stat-sub">input / cached / output</div></div>
         <div class="stat"><div class="stat-label">按当前模型估算</div><div class="stat-value usd" id="model-cost">${model.costKnown ? fmtUsd(model.estimatedCost) : '--'}</div><div class="stat-sub" id="model-cost-sub">${model.costKnown ? 'blended ' + model.blendedPer1M.toFixed(3) + ' $/1M' : '暂无该模型官方价目'}</div></div>
       </div>
@@ -208,8 +223,8 @@ function getTokenDetailHtml({ stats, pricing, baselines, currentEmail, bundleAcc
       <div class="grid-4" style="margin-top:14px">
         <div class="stat"><div class="stat-label">账号池总数</div><div class="stat-value" id="pool-acc-count">${accs.length}</div><div class="stat-sub" id="pool-valid-count">有效 ${validAccs.length}</div></div>
         <div class="stat"><div class="stat-label">池估算花费/日</div><div class="stat-value usd" id="pool-usd">${fmtUsd(aggregateDailyUsd)}</div><div class="stat-sub">按 ${fmtUsd(pricing.dailyQuotaUsd)}/账号 × 已耗</div></div>
-        <div class="stat"><div class="stat-label">本伴生 Token</div><div class="stat-value tok" id="local-token">${fmtToken(stats.totalEstimatedTokens)}</div><div class="stat-sub" id="local-token-sub">${stats.totalRequests} 次请求</div></div>
-        <div class="stat"><div class="stat-label">本伴生 花费</div><div class="stat-value usd" id="local-usd">${fmtUsd(totalCost)}</div><div class="stat-sub">blended ${pricing.blendedPer1M.toFixed(3)} $/1M</div></div>
+        <div class="stat"><div class="stat-label">本伴生 Token</div><div class="stat-value tok" id="local-token">${fmtToken(localTokens)}</div><div class="stat-sub" id="local-token-sub">${stats.totalRealTokens ? '真实样本 ' + (stats.realSamples || 0) + ' 条' : stats.totalRequests + ' 次请求'}</div></div>
+        <div class="stat"><div class="stat-label">本伴生 花费</div><div class="stat-value usd" id="local-usd">${fmtUsd(totalCost)}</div><div class="stat-sub">${model.costKnown ? '当前模型' : '估算'} blended ${effectiveBlendedPer1M.toFixed(3)} $/1M</div></div>
       </div>
     </div>
 
@@ -227,36 +242,36 @@ function getTokenDetailHtml({ stats, pricing, baselines, currentEmail, bundleAcc
         <div class="stat" style="--gc:rgba(236,72,153,.2)"><div class="glow"></div>
           <div class="stat-label">本轮花费  <span id="cur-email">${escapeHtml(currentEmail || '当前账号')}</span></div>
           <div class="stat-value usd" id="cur-usd">${fmtUsd(totalCost)}</div>
-          <div class="stat-sub" id="cur-token-sub"> ${fmtToken(stats.totalEstimatedTokens)} tok  日额度 ${fmtUsd(pricing.dailyQuotaUsd)}</div>
+          <div class="stat-sub" id="cur-token-sub"> ${fmtToken(localTokens)} tok  日额度 ${fmtUsd(pricing.dailyQuotaUsd)}</div>
         </div>
       </div>
     </div>
 
     <div class="card">
       <div class="card-head">
-        <div class="card-title amber"><span class="icon-pill">${SVG.eye}</span>可观测 Token 估算<span class="pill warn" style="margin-left:6px"><i class="dot"></i>估算</span></div>
+        <div class="card-title amber"><span class="icon-pill">${SVG.eye}</span>可观测 Token · ${hasRealObs ? '真实优先' : '估算'}<span class="pill ${hasRealObs ? '' : 'warn'}" style="margin-left:6px"><i class="dot"></i>${hasRealObs ? '真实' : '估算'}</span></div>
         <div class="card-actions"><button class="btn" onclick="send('clearStats')"><span class="ic">${SVG.trash}</span>清除统计</button></div>
       </div>
       <div class="grid-4">
         <div class="stat" style="--gc:rgba(167,139,250,.18)"><div class="glow"></div>
           <div class="stat-label">总 Token</div>
-          <div class="stat-value purple" id="obs-total-token">${fmtToken(stats.totalEstimatedTokens)}</div>
-          <div class="stat-sub" id="obs-total-sub">${stats.totalRequests} 次  均值 ${fmtToken(avg)}</div>
+          <div class="stat-value purple" id="obs-total-token">${fmtToken(obsTotal)}</div>
+          <div class="stat-sub" id="obs-total-sub">${obsCount} ${hasRealObs ? '条真实样本' : '次'}  均值 ${fmtToken(obsAvg)}</div>
         </div>
         <div class="stat" style="--gc:rgba(34,197,94,.18)"><div class="glow"></div>
           <div class="stat-label">预计已节约</div>
           <div class="stat-value green" id="obs-saved-token">${fmtToken(stats.totalSavedTokens)}</div>
-          <div class="stat-sub">省积分 ${last && last.savePoints ? '已开启' : '未开启 / 暂无'}</div>
+          <div class="stat-sub" id="obs-saved-sub">${hasRealObs ? '估算节约仅供参考' : '省积分 ' + (last && last.savePoints ? '已开启' : '未开启 / 暂无')}</div>
         </div>
         <div class="stat" style="--gc:${lastRiskColor}33"><div class="glow"></div>
           <div class="stat-label">上下文风险</div>
-          <div class="stat-value" style="color:${lastRiskColor}">${lastRisk}</div>
-          <div class="stat-sub">${last && last.riskReasons && last.riskReasons.length ? last.riskReasons.join('，') : '当前上下文较轻'}</div>
+          <div class="stat-value" id="obs-risk-value" style="color:${lastRiskColor}">${lastRisk}</div>
+          <div class="stat-sub" id="obs-risk-sub">${hasRealObs ? '当前显示真实 Token 消耗样本' : (last && last.riskReasons && last.riskReasons.length ? last.riskReasons.join('，') : '当前上下文较轻')}</div>
         </div>
         <div class="stat" style="--gc:rgba(96,165,250,.18)"><div class="glow"></div>
           <div class="stat-label">最近一次用量</div>
-          <div class="stat-value purple" id="obs-last-token">${last ? fmtToken(last.estimatedTokens) : '0'}</div>
-          <div class="stat-sub" id="obs-last-sub">${last ? 'details ' + last.detailsTokens + '  高风险 ' + (stats.highRiskCount || 0) + ' 次' : '暂无记录'}</div>
+          <div class="stat-value purple" id="obs-last-token">${obsLast ? fmtToken(obsLastTokens) : '0'}</div>
+          <div class="stat-sub" id="obs-last-sub">${obsLastSub}</div>
         </div>
       </div>
     </div>
@@ -313,22 +328,29 @@ function getTokenDetailHtml({ stats, pricing, baselines, currentEmail, bundleAcc
         setText('pool-valid-count','有效 '+(m.validAccountCount||0));
         setText('pool-usd',fmtUsd(m.aggregateDailyUsd||0));
         setText('local-token',fmtTok(m.localTokens||0));
-        setText('local-token-sub',String(m.requests||0)+' 次请求');
+        setText('local-token-sub',m.hasRealTokens?'真实样本 '+(m.realSamples||0)+' 条':String(m.requests||0)+' 次请求');
         setText('local-usd',fmtUsd(m.localCost||0));
         setText('cur-email',m.currentEmail||'当前账号');
         setText('cur-usd',fmtUsd(m.localCost||0));
         setText('cur-token-sub',' '+fmtTok(m.localTokens||0)+' tok  日额度 ${fmtUsd(pricing.dailyQuotaUsd)}');
-        setText('obs-total-token',fmtTok(m.localTokens||0));
-        setText('obs-total-sub',String(m.requests||0)+' 次  均值 '+fmtTok(m.avgTokens||0));
+        setText('obs-total-token',fmtTok(m.obsTotal!==undefined?m.obsTotal:m.localTokens||0));
+        setText('obs-total-sub',String(m.obsCount!==undefined?m.obsCount:m.requests||0)+' '+(m.obsHasReal?'条真实样本':'次')+'  均值 '+fmtTok(m.obsAvg!==undefined?m.obsAvg:m.avgTokens||0));
         setText('obs-saved-token',fmtTok(m.savedTokens||0));
-        setText('obs-last-token',fmtTok(m.lastTokens||0));
-        setText('obs-last-sub',m.lastTokens?'details '+(m.lastDetailsTokens||0)+'  高风险 '+(m.highRiskCount||0)+' 次':'暂无记录');
-        const mi=(m.model&&m.model.info)||{};
-        const mp=mi.price||null;
+        setText('obs-saved-sub',m.obsHasReal?'估算节约仅供参考':'省积分统计');
+        setText('obs-risk-value',m.obsRisk||'无数据');
+        const riskValue=document.getElementById('obs-risk-value');
+        if(riskValue&&m.obsRiskColor)riskValue.style.color=m.obsRiskColor;
+        setText('obs-risk-sub',m.obsRiskSub||'当前上下文较轻');
+        setText('obs-last-token',fmtTok(m.obsLastTokens!==undefined?m.obsLastTokens:m.lastTokens||0));
+        setText('obs-last-sub',m.obsLastSub||(m.lastTokens?'details '+(m.lastDetailsTokens||0)+'  高风险 '+(m.highRiskCount||0)+' 次':'暂无记录'));
+        const mm=m.model||{};
+        const mi=mm.info||{};
+        const mp=mm.price||mi.price||null;
+        const mc=mp&&mp.creditMultiplier!==undefined&&mp.creditMultiplier!==null?mp.creditMultiplier:mi.credit;
         setText('model-name',mi.name||(m.model&&m.model.id)||'未捕获');
-        setText('model-id',(m.model&&m.model.id)||'未捕获当前选择，可点击手动设置');
-        setText('model-credit',mi.credit!==undefined?mi.credit+'x':'--');
-        setText('model-provider',mi.provider||'unknown');
+        setText('model-id',mm.id||'未捕获当前选择，可点击手动设置');
+        setText('model-credit',mc!==undefined&&mc!==null?mc+'x':'--');
+        setText('model-provider',mm.costSource==='windsurf-config'?'windsurf-config':(mi.provider||'unknown'));
         setText('model-price',mp?'$'+mp.inputPer1M+' / $'+mp.cachedPer1M+' / $'+mp.outputPer1M:'待补');
         setText('model-cost',m.model&&m.model.costKnown?fmtUsd(m.model.estimatedCost):'--');
         setText('model-cost-sub',m.model&&m.model.costKnown?'blended '+Number(m.model.blendedPer1M||0).toFixed(3)+' $/1M':'暂无该模型官方价目');

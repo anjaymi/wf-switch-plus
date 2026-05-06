@@ -54,11 +54,13 @@ function openContinueDialog(context, requestContext = {}) {
     text: String(cfg.get('autoReplyText', '继续') || '继续'),
     delaySec: Math.max(0, Math.min(60, Number(cfg.get('autoReplyDelaySec', 3) || 0))),
   };
+  const savePoints = !!cfg.get('enableSavePoints', true);
   panel.webview.html = getContinueDialogHtml({
     workspace: getWorkspaceInfo(),
     requestContext,
     port: continueHttpPort || WF_CONTINUE_PORT,
     autoReply,
+    savePoints,
   });
   let settled = false;
   let resolveResult = null;
@@ -175,6 +177,23 @@ function sendJson(res, statusCode, data) {
   res.end(body);
 }
 
+function clampText(value, maxChars) {
+  const text = String(value || '');
+  const max = Math.max(0, Number(maxChars || 0));
+  if (!max || text.length <= max) return text;
+  return text.slice(0, max).trimEnd() + '\n...（已按节约 Token 模式截断）';
+}
+
+function normalizeContinueBody(body) {
+  const cfg = vscode.workspace.getConfiguration('wfSwitchPlus');
+  if (!cfg.get('enableSavePoints', true)) return body || {};
+  const maxDetails = Math.max(20, Number(cfg.get('savePointsDetailsMaxChars', 120) || 120));
+  return Object.assign({}, body || {}, {
+    reason: clampText(body && body.reason, 80),
+    details: clampText(body && body.details, maxDetails),
+  });
+}
+
 async function readWfContinueSecret() {
   try {
     if (!fsSync.existsSync(WF_SECRET_FILE)) return '';
@@ -233,7 +252,7 @@ function startContinueHttpServer(context) {
         sendJson(res, 409, { should_continue: false, error: 'continue_dialog_busy' });
         return;
       }
-      const body = await readRequestBody(req);
+      const body = normalizeContinueBody(await readRequestBody(req));
       try { await recordContinueTokenUsage(body); } catch (e) { console.warn('[wfSwitch] token usage record failed:', e.message); }
       activeContinueRequest = openContinueDialog(context, {
         httpMode: true,

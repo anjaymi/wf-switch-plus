@@ -1,0 +1,14 @@
+# Packaging-only excludes. Keep runtime files: extension.js, package.json, icon.svg, src/**, scripts/**, README, LICENSE.
+.github/**
+docs/**
+releases/**
+temp/**
+.gitignore
+*.vsix
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.DS_Store
+Thumbs.db

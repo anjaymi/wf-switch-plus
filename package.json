@@ -1,8 +1,8 @@
-﻿{
+{
   "name": "wf-switch-plus",
   "displayName": "WF 增强",
   "description": "WF 一键换号的伴生增强插件：保留原版插件独立安装，提供持续对话、Token 统计、自检和快捷控制台。",
-  "version": "0.3.4",
+  "version": "0.3.8-dev17",
   "publisher": "xy",
   "license": "GPL-3.0-only",
   "homepage": "https://anjaymi.github.io/wf-switch-plus/",
@@ -58,13 +58,21 @@
       { "command": "wfSwitchPlus.toggleAutoReply", "title": "WF 增强: 开关继续对话自动回复" },
       { "command": "wfSwitchPlus.setAutoReplyPhrase", "title": "WF 增强: 设置继续对话固定回复" },
       { "command": "wfSwitchPlus.selfCheck", "title": "WF 增强: 自检报告" },
+      { "command": "wfSwitchPlus.refreshModelCatalog", "title": "WF 增强: 同步 Windsurf 官方模型价格" },
+      { "command": "wfSwitchPlus.injectWindsurfBridge", "title": "WF 增强: 注入 Windsurf 主包桥（读取真实 Token）" },
+      { "command": "wfSwitchPlus.removeWindsurfBridge", "title": "WF 增强: 移除 Windsurf 主包桥" },
+      { "command": "wfSwitchPlus.verifyWindsurfBridge", "title": "WF 增强: 验证 Windsurf 桥状态" },
+      { "command": "wfSwitchPlus.readWindsurfTrajectoryTokens", "title": "WF 增强: 读取 Windsurf Trajectory 真实 Token" },
       { "command": "wfSwitchPlus.injectOriginalBridge", "title": "WF 增强: 向原版插件注入伴生桥" },
       { "command": "wfSwitchPlus.removeOriginalBridge", "title": "WF 增强: 移除原版插件伴生桥" },
       { "command": "wfSwitchPlus.openAccountsOverview", "title": "WF 增强: 打开账号总览" },
       { "command": "wfSwitchPlus.checkOriginalUpdate", "title": "WF 增强: 检查原版插件更新" },
+      { "command": "wfSwitchPlus.quickActions", "title": "WF 增强: 打开自带快捷弹窗" },
       { "command": "wfSwitchPlus.focusOriginalPanel", "title": "WF 增强: 聚焦原版插件面板" },
       { "command": "wfSwitchPlus.refreshAccountsViaBridge", "title": "WF 增强: 通过桥调用原版账号刷新" },
       { "command": "wfSwitchPlus.smartSwitch", "title": "WF 增强: 按日额度自动切号" },
+      { "command": "wfSwitchPlus.fastSwitchBest", "title": "WF 增强: Zen 快速切到日额度最高账号" },
+      { "command": "wfSwitchPlus.fastSwitchPick", "title": "WF 增强: Zen 选择账号快速切换" },
       { "command": "wfSwitchPlus.toggleSaveToken", "title": "WF 增强: 开关节约 Token 模式" },
       { "command": "wfSwitchPlus.toggleAutoQuotaSwitch", "title": "WF 增强: 开关无感切号" },
       { "command": "wfSwitchPlus.setQuotaThreshold", "title": "WF 增强: 设置无感切号阈值" }
@@ -77,10 +85,17 @@
           "default": true,
           "description": "开启省积分持续对话：全局规则只传短原因，不强制生成长 details。"
         },
+        "wfSwitchPlus.savePointsDetailsMaxChars": {
+          "type": "number",
+          "default": 120,
+          "minimum": 20,
+          "maximum": 2000,
+          "description": "节约 Token 模式下，HTTP 继续对话入口保留的 details 最大字符数。"
+        },
         "wfSwitchPlus.autoQuotaSwitch": {
           "type": "boolean",
           "default": false,
-          "description": "开启后，伴生插件每 5 秒检查当前账号日额度。低于 autoQuotaThreshold 且存在更高额度账号时，自动调用原版 localSwitchTo 无感切号。"
+          "description": "开启后，伴生插件每 5 秒检查当前账号日额度。低于 autoQuotaThreshold 且存在更高额度账号时，优先 Zen 快速注入，失败再回退原版桥。"
         },
         "wfSwitchPlus.autoQuotaThreshold": {
           "type": "number",
@@ -88,6 +103,16 @@
           "minimum": 1,
           "maximum": 99,
           "description": "无感切号触发阈值（1-99）。当前账号日额度低于此值且有更高账号时才切。"
+        },
+        "wfSwitchPlus.autoQuotaSwitchUseFastPath": {
+          "type": "boolean",
+          "default": true,
+          "description": "自动无感切号触发时优先使用 Zen 快速通道，直接调用 Windsurf loginWithAuthToken，不主动重载窗口。关闭后仅走原版伴生桥 localSwitchTo。"
+        },
+        "wfSwitchPlus.fastSwitchFallbackToOriginal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Zen 快速切号失败时，自动回退到原版伴生桥 localSwitchTo。"
         },
         "wfSwitchPlus.autoReplyEnabled": {
           "type": "boolean",
@@ -175,4 +200,3 @@
     }
   }
 }
-

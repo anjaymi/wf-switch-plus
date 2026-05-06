@@ -8,7 +8,11 @@
     requestWorkspace: requestContext.workspace || '',
     port: meta.port || '',
     autoReply: meta.autoReply || { enabled: false, text: '', delaySec: 0 },
+    savePoints: !!meta.savePoints,
   }).replace(/</g, '\\u003c');
+  const imageBase64Checked = meta.savePoints ? '' : ' checked';
+  const imagePathChecked = meta.savePoints ? ' checked' : '';
+  const imageHint = meta.savePoints ? '节约 Token 模式已开启，默认只传图片路径，避免 Base64 膨胀。' : '可按需选择 Base64；大图会显著增加结构化请求体积。';
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
     *{box-sizing:border-box}
     body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);background:#1f232b;margin:0;padding:18px}
@@ -79,9 +83,10 @@
       <div class="drop" id="pasteZone">� 可直接粘贴截图/图片，或点击下方按钮选择</div>
       <div class="row">
         <span class="muted">粘贴图片模式：</span>
-        <label><input type="radio" name="imageMode" value="base64" checked> 图片内容(Base64)</label>
-        <label><input type="radio" name="imageMode" value="path"> 仅路径</label>
+        <label><input type="radio" name="imageMode" value="base64"${imageBase64Checked}> 图片内容(Base64)</label>
+        <label><input type="radio" name="imageMode" value="path"${imagePathChecked}> 仅路径</label>
       </div>
+      <div class="muted" style="margin-top:6px">${imageHint}</div>
       <button id="btnPickImages" class="secondary" style="margin-top:10px">📁 选择图片</button>
       <div id="imageFiles" style="margin-top:8px" class="muted">尚未选择图片</div>
       <div id="pastedImages" style="margin-top:8px"></div>
