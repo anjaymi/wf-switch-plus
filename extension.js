@@ -108,7 +108,13 @@ async function openAccountsOverview(context) {
           vscode.window.showErrorMessage('剪贴板内容不是合法 JSON：' + (e && e.message || e));
         }
       } else if (msg.type === ACCOUNTS.IMPORT_XINGHUO) {
-        accountsOverviewPanel?.webview.postMessage({ type: ACCOUNTS.SHOW_XINGHUO_IMPORT, payload: getXinghuoImportPayload() });
+        let payload;
+        try {
+          payload = getXinghuoImportPayload();
+        } catch (e) {
+          payload = { accounts: [], sources: [], error: e && e.message || String(e) };
+        }
+        await accountsOverviewPanel?.webview.postMessage({ type: ACCOUNTS.SHOW_XINGHUO_IMPORT, payload });
         return;
       } else if (msg.type === ACCOUNTS.IMPORT_XINGHUO_SELECTED) {
         await importSelectedXinghuoAccounts(msg.payload);

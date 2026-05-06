@@ -174,7 +174,7 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
         <button class="btn" onclick="send('exportTokens', 'clipboard')">导出全部 Token（剪贴板）</button>
         <button class="btn" onclick="send('exportTokens', 'file')">导出全部 Token（文件）</button>
         <button class="btn" onclick="send('importClipboard')">从剪贴板导入</button>
-        <button class="btn" onclick="send('importXinghuo')">从星火导入</button>
+        <button class="btn" onclick="requestXinghuoImport()">从星火导入</button>
         <button class="btn" onclick="send('resetAll')">重置全部基线</button>
       </div>
     </div>
@@ -285,7 +285,22 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
       xinghuoAccounts.forEach(function(a){if(a&&a.email)xinghuoSelected[String(a.email).toLowerCase()]=true;});
       document.getElementById('xinghuoImportModal').style.display='flex';
       document.getElementById('xh-search').value='';
+      if(payload&&payload.error){
+        document.getElementById('xh-source').textContent='读取失败：'+payload.error;
+        document.getElementById('xh-list').innerHTML='<div class="xh-empty">星火账号读取失败，请稍后重试</div>';
+        updateXinghuoSelected();
+        return;
+      }
       renderXinghuoImportList();
+    }
+    function requestXinghuoImport(){
+      document.getElementById('xinghuoImportModal').style.display='flex';
+      document.getElementById('xh-search').value='';
+      document.getElementById('xh-source').textContent='正在读取星火账号...';
+      document.getElementById('xh-list').innerHTML='<div class="xh-empty">正在扫描 .xinghuowindsurf/shared-data/accounts.json</div>';
+      document.getElementById('xh-count').textContent='';
+      document.getElementById('xh-import-btn').disabled=true;
+      send('importXinghuo');
     }
     function closeXinghuoImportModal(){document.getElementById('xinghuoImportModal').style.display='none';}
     function renderXinghuoImportList(){
