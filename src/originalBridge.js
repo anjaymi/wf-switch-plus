@@ -4,7 +4,7 @@ const fsSync = require('fs');
 const path = require('path');
 
 const ORIGINAL_ID = 'xy.wf-switch-ext';
-const BRIDGE_VERSION = 3;
+const BRIDGE_VERSION = 4;
 const BEGIN = '/* WF_PLUS_BRIDGE_BEGIN_v' + BRIDGE_VERSION + ' */';
 const END = '/* WF_PLUS_BRIDGE_END_v' + BRIDGE_VERSION + ' */';
 // 任意旧版本都用同一个匹配前缀清理
@@ -23,9 +23,26 @@ function buildBridgeSnippet() {
     '  var _wfReqFile = _wfPath.join(_wfDir, "wf-bridge-request.json");',
     '  var _wfReplyFile = _wfPath.join(_wfDir, "wf-bridge-reply.json");',
     '  var _wfWatchKeys = { lastEmail: "currentEmail", quotaBaselineV1: "baselines", switchHistory: "switchHistory", myAccountsBundleV1: "bundle" };',
+    '  function _wfAccountKey(account) { return String(account && account.email || "").trim().toLowerCase(); }',
+    '  function _wfMergeAccounts(existing, imported) {',
+    '    var map = {}; var out = [];',
+    '    function addBase(acc) { var key = _wfAccountKey(acc); if (!key) return; map[key] = Object.assign({}, acc); out.push(map[key]); }',
+    '    function addImported(acc) { var key = _wfAccountKey(acc); if (!key) return; var copy = Object.assign({}, acc, { imported: true, source: acc.source || "xinghuo" }); if (!map[key]) { map[key] = copy; out.push(map[key]); } else { var prev = map[key]; Object.assign(prev, copy, { imported: true, source: prev.source === copy.source ? copy.source : "merged" }); } }',
+    '    (Array.isArray(existing) ? existing : []).forEach(addBase);',
+    '    (Array.isArray(imported) ? imported : []).forEach(addImported);',
+    '    return out;',
+    '  }',
+    '  function _wfMergeBundleWithImported(bundle, importedAccounts) {',
+    '    var base = Object.assign({}, bundle || {});',
+    '    var imported = Array.isArray(importedAccounts) ? importedAccounts : [];',
+    '    if (!imported.length) return base;',
+    '    base.accounts = _wfMergeAccounts(Array.isArray(base.accounts) ? base.accounts : [], imported);',
+    '    return base;',
+    '  }',
     '  function _wfReadShared() { try { if (_wfFs.existsSync(_wfFile)) return JSON.parse(_wfFs.readFileSync(_wfFile, "utf8")) || {}; } catch (e) {} return {}; }',
-    '  function _wfWriteShared(patch) { try { var cur = _wfReadShared(); Object.assign(cur, patch); cur._wfLastSync = Date.now(); cur._wfBridge = "v' + BRIDGE_VERSION + '"; _wfFs.mkdirSync(_wfDir, { recursive: true }); _wfFs.writeFileSync(_wfFile, JSON.stringify(cur, null, 2), "utf8"); } catch (e) {} }',
-    '  function _wfWriteReply(obj) { try { _wfFs.mkdirSync(_wfDir, { recursive: true }); _wfFs.writeFileSync(_wfReplyFile, JSON.stringify(Object.assign({ at: Date.now() }, obj), null, 2), "utf8"); } catch (e) {} }',
+    '  function _wfWriteShared(patch) { try { var cur = _wfReadShared(); Object.assign(cur, patch); if (cur.bundle && cur.bundle.accounts) cur.bundle = _wfMergeBundleWithImported(cur.bundle, cur.importedAccounts); cur._wfLastSync = Date.now(); cur._wfBridge = "v' + BRIDGE_VERSION + '"; _wfFs.mkdirSync(_wfDir, { recursive: true }); _wfFs.writeFileSync(_wfFile, JSON.stringify(cur, null, 2), "utf8"); } catch (e) {} }',
+    '  var _wfCurrentReq = null;',
+    '  function _wfWriteReply(obj) { try { _wfFs.mkdirSync(_wfDir, { recursive: true }); _wfFs.writeFileSync(_wfReplyFile, JSON.stringify(Object.assign({ at: Date.now(), requestId: _wfCurrentReq && _wfCurrentReq.requestId || "" }, obj), null, 2), "utf8"); } catch (e) {} }',
     '  var _wfOrigUpdate = context.globalState.update.bind(context.globalState);',
     '  context.globalState.update = function(key, value) {',
     '    var p = _wfOrigUpdate(key, value);',
@@ -49,6 +66,7 @@ function buildBridgeSnippet() {
     '      _wfLastReq = st.mtimeMs;',
     '      var req = {};',
     '      try { req = JSON.parse(_wfFs.readFileSync(_wfReqFile, "utf8")) || {}; } catch (e) { return; }',
+    '      _wfCurrentReq = req;',
     '      var action = req.action || "";',
     '      if (action === "refreshAccounts") {',
     '        try { if (typeof panelProvider !== "undefined" && panelProvider) { panelProvider.refresh(); panelProvider.loadAccounts(); _wfWriteReply({ action: action, ok: true }); } else { _wfWriteReply({ action: action, ok: false, error: "panelProvider 未就绪" }); } } catch (e) { _wfWriteReply({ action: action, ok: false, error: e && e.message }); }',

@@ -1,4 +1,5 @@
 ﻿const fs = require('fs');
+const { escapeHtml } = require('./shared/htmlEscape');
 const { buildSparkPayload, renderSparkCard, SPARK_CLIENT_SCRIPT } = require('./sparkCard');
 const { detectCurrentModel, estimateModelCost, getDynamicCatalog } = require('./modelCatalog');
 const { isWeeklyQuotaFrozen, getAccountFreezeReason } = require('./domain/accountSelector');
@@ -31,7 +32,6 @@ function fmtToken(value) {
   return String(Math.round(n));
 }
 function fmtUsd(value) { return '$' + Number(value || 0).toFixed(2); }
-function escapeHtml(value) { return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
 // sparklineSvg 已抽离到 ./sparkCard.js
 

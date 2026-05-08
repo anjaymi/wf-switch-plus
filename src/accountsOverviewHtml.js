@@ -62,12 +62,16 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     const wColor = weekly === null ? '#475569' : (weekly >= 60 ? '#22c55e' : weekly >= 25 ? '#f59e0b' : '#ef4444');
     const planEndStr = planEnd ? '订阅到期 ' + new Date(planEnd).toLocaleDateString('zh-CN') : '';
     const isBest = bestEmail && email === bestEmail && !isCurrent && daily !== null && !frozen;
+    const source = String(a.source || (a.imported ? 'xinghuo' : 'original'));
+    const sourceLabel = source === 'xinghuo' ? '星火' : (source === 'merged' ? '原版+星火' : '原版');
+    const sourceClass = source === 'xinghuo' ? 'badge-xh' : (source === 'merged' ? 'badge-merged' : 'badge-src');
     return `
       <div class="acc ${isCurrent ? 'current' : ''} ${!valid ? 'invalid' : ''} ${frozen ? 'frozen' : ''}">
         <div class="acc-main">
           <div class="acc-email">${escapeHtml(email)}
             ${isCurrent ? '<span class="badge badge-cur">当前账号</span>' : ''}
             ${isBest ? '<span class="badge badge-best">日额度最高</span>' : ''}
+            <span class="badge ${sourceClass}">${escapeHtml(sourceLabel)}</span>
             ${frozen ? '<span class="badge badge-frozen">' + escapeHtml(freezeReason) + '</span>' : ''}
             ${!valid ? '<span class="badge badge-bad">异常</span>' : ''}
           </div>
@@ -126,6 +130,9 @@ function getAccountsOverviewHtml({ shared, baselines, currentEmail, bridgeInject
     .badge-cur{background:rgba(139,92,246,.25);color:#c4b5fd;border:1px solid rgba(139,92,246,.45)}
     .badge-best{background:rgba(34,197,94,.2);color:#86efac;border:1px solid rgba(34,197,94,.4)}
     .badge-frozen{background:rgba(239,68,68,.18);color:#fca5a5;border:1px solid rgba(239,68,68,.35)}
+    .badge-src{background:rgba(148,163,184,.16);color:#cbd5e1;border:1px solid rgba(148,163,184,.28)}
+    .badge-xh{background:rgba(14,165,233,.18);color:#7dd3fc;border:1px solid rgba(14,165,233,.36)}
+    .badge-merged{background:rgba(245,158,11,.18);color:#fcd34d;border:1px solid rgba(245,158,11,.36)}
     .badge-bad{background:rgba(239,68,68,.18);color:#fca5a5;border:1px solid rgba(239,68,68,.35)}
     .acc-meta{font-size:11px;color:#94a3b8;margin-top:4px}
     .acc-quotas{display:flex;flex-direction:column;gap:6px;min-width:180px}

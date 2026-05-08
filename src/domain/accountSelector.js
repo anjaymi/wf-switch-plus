@@ -1,4 +1,4 @@
-const { readSharedState, getBundleAccounts } = require('../state/sharedState');
+const { readSharedState, getEffectiveAccounts } = require('../state/sharedState');
 
 function accountKey(account) {
   const email = typeof account === 'string' ? account : (account && account.email);
@@ -26,7 +26,7 @@ function isWeeklyQuotaFrozen(account) {
 }
 
 function pickBestAccountByDaily() {
-  const accs = getBundleAccounts().filter(a => a && a.email && (a.valid !== false) && !isWeeklyQuotaFrozen(a));
+  const accs = getEffectiveAccounts().filter(a => a && a.email && (a.valid !== false) && !isWeeklyQuotaFrozen(a));
   if (!accs.length) return null;
   return accs.reduce((best, cur) => {
     const bd = (best && best.daily !== undefined && best.daily !== null) ? Number(best.daily) : -1;

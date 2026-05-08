@@ -1,11 +1,12 @@
-﻿function fmtToken(value) {
+﻿const { escapeHtml } = require('./shared/htmlEscape');
+
+function fmtToken(value) {
   const n = Number(value || 0);
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
   return String(Math.round(n));
 }
 function fmtUsd(value) { return '$' + Number(value || 0).toFixed(2); }
-function escapeHtml(value) { return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
 const SVG = {
   refresh: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',

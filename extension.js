@@ -7,172 +7,20 @@ const windsurfInjector = require('./src/windsurfInjector');
 const windsurfInternals = require('./src/windsurfInternals');
 const { hackWindsurf, checkLoginStatus } = require('./src/windsurfAuth');
 const { getPlusPanelHtml, getPlusPanelLiveData } = require('./src/plusPanelHtml');
-const { getAccountsOverviewHtml } = require('./src/accountsOverviewHtml');
 const originalBridge = require('./src/originalBridge');
-const { readSharedState, writeSharedState, findBundleAccount, getBundleAccounts } = require('./src/state/sharedState');
+const { readSharedState, buildEffectiveShared, findEffectiveAccount, getEffectiveAccounts } = require('./src/state/sharedState');
 const { sendBridgeRequest } = require('./src/state/bridgeRequest');
-const { pickBestAccountByDaily, isWeeklyQuotaFrozen, getAccountFreezeReason } = require('./src/domain/accountSelector');
-const { exportAllTokens } = require('./src/domain/tokenExporter');
-const { readXinghuoAccounts, mergeAccounts } = require('./src/domain/xinghuoImporter');
-const { fastSwitchToAccount, getAccountToken } = require('./src/domain/fastSwitch');
-const { checkContinueHealth, formatContinueHealthReport } = require('./src/continueHealth');
-const { ACCOUNTS, PLUS_PANEL } = require('./src/shared/messageTypes');
-
-let accountsOverviewPanel = null;
-function getXinghuoImportPayload() {
-  const result = readXinghuoAccounts();
-  return {
-    accounts: result.accounts.map(acc => ({
-      email: acc.email,
-      planName: acc.planName,
-      daily: acc.daily,
-      weekly: acc.weekly,
-      valid: acc.valid,
-      manualFrozen: acc.manualFrozen,
-      sourceFile: acc.sourceFile,
-    })),
-    sources: result.sources,
-  };
-}
-async function importSelectedXinghuoAccounts(selectedEmails) {
-  const keys = new Set((Array.isArray(selectedEmails) ? selectedEmails : []).map(x => String(x || '').trim().toLowerCase()).filter(Boolean));
-  if (!keys.size) {
-    vscode.window.showWarningMessage('请至少选择一个星火账号');
-    return { ok: false, imported: 0 };
-  }
-  const result = readXinghuoAccounts();
-  if (!result.accounts.length) {
-    const detail = result.sources.map(s => (s.ok ? 'OK ' + s.accountCount : (s.reason || 'failed')) + ' · ' + s.file).join('\n');
-    vscode.window.showWarningMessage('未发现可导入的星火账号，请确认星火插件已生成 accounts.json', { modal: true, detail });
-    return { ok: false, imported: 0 };
-  }
-  const selected = result.accounts.filter(acc => keys.has(String(acc.email || '').toLowerCase()));
-  if (!selected.length) {
-    vscode.window.showWarningMessage('所选星火账号已不存在，请重新打开导入弹窗');
-    return { ok: false, imported: 0 };
-  }
-  const shared = readSharedState();
-  const bundle = Object.assign({}, shared.bundle || {});
-  const merged = mergeAccounts(Array.isArray(bundle.accounts) ? bundle.accounts : [], selected);
-  await writeSharedState({
-    bundle: Object.assign({}, bundle, {
-      accounts: merged.accounts,
-      syncedAt: Date.now(),
-      source: 'xinghuo-import',
-    }),
-  });
-  vscode.window.showInformationMessage('已从星火导入 ' + selected.length + ' 个账号（新增 ' + merged.added + '，更新 ' + merged.updated + '）');
-  return { ok: true, imported: selected.length };
-}
-function renderAccountsOverview(context) {
-  if (!accountsOverviewPanel) return;
-  const shared = readSharedState();
-  const baselines = context.globalState.get('quotaBaselineV1', {}) || {};
-  const currentEmail = (shared.currentEmail) || context.globalState.get('lastEmail', '');
-  accountsOverviewPanel.webview.html = getAccountsOverviewHtml({
-    shared,
-    baselines,
-    currentEmail,
-    bridgeInjected: !!bridgeStatusCache.injected,
-  });
-}
-async function openAccountsOverview(context) {
-  if (accountsOverviewPanel) { try { accountsOverviewPanel.reveal(vscode.ViewColumn.Active); } catch {} renderAccountsOverview(context); return; }
-  accountsOverviewPanel = vscode.window.createWebviewPanel('wfSwitchPlusAccounts', 'WF 增强：账号总览', vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
-  accountsOverviewPanel.onDidDispose(() => { accountsOverviewPanel = null; });
-  accountsOverviewPanel.webview.onDidReceiveMessage(async (msg) => {
-    if (!msg || !msg.type) return;
-    try {
-      if (msg.type === ACCOUNTS.REFRESH) {
-        // noop, just rerender
-      } else if (msg.type === ACCOUNTS.FOCUS_ORIGINAL_PANEL) {
-        try { await vscode.commands.executeCommand('wfSwitch.panel.focus'); } catch { try { await vscode.commands.executeCommand('workbench.view.extension.wfSwitchView'); } catch {} }
-      } else if (msg.type === ACCOUNTS.COPY_EMAIL && msg.payload) {
-        await vscode.env.clipboard.writeText(String(msg.payload));
-        vscode.window.setStatusBarMessage('已复制账号邮箱', 1500);
-      } else if (msg.type === ACCOUNTS.RESET_BASELINE && msg.payload) {
-        const map = context.globalState.get('quotaBaselineV1', {}) || {};
-        const key = String(msg.payload).toLowerCase();
-        if (map[key]) { delete map[key]; await context.globalState.update('quotaBaselineV1', map); }
-        vscode.window.setStatusBarMessage('已重置该账号基线', 1500);
-      } else if (msg.type === ACCOUNTS.RESET_ALL) {
-        await context.globalState.update('quotaBaselineV1', {});
-        vscode.window.setStatusBarMessage('已重置全部基线', 1500);
-      } else if (msg.type === ACCOUNTS.IMPORT_CLIPBOARD) {
-        const text = await vscode.env.clipboard.readText();
-        try {
-          const data = JSON.parse(text || '{}');
-          await writeSharedState({ bundle: data.bundle || {}, baselines: data.baselines || {}, currentEmail: data.currentEmail || '' });
-          vscode.window.showInformationMessage('已从剪贴板导入账号数据');
-        } catch (e) {
-          vscode.window.showErrorMessage('剪贴板内容不是合法 JSON：' + (e && e.message || e));
-        }
-      } else if (msg.type === ACCOUNTS.IMPORT_XINGHUO) {
-        let payload;
-        try {
-          payload = getXinghuoImportPayload();
-        } catch (e) {
-          payload = { accounts: [], sources: [], error: e && e.message || String(e) };
-        }
-        await accountsOverviewPanel?.webview.postMessage({ type: ACCOUNTS.SHOW_XINGHUO_IMPORT, payload });
-        return;
-      } else if (msg.type === ACCOUNTS.IMPORT_XINGHUO_SELECTED) {
-        await importSelectedXinghuoAccounts(msg.payload);
-      } else if (msg.type === ACCOUNTS.REFRESH_VIA_BRIDGE) {
-        const r = await sendBridgeRequest('refreshAccounts');
-        if (r.ok) vscode.window.setStatusBarMessage('已请求原版刷新账号', 2000);
-        else vscode.window.showWarningMessage('调用原版刷新失败：' + (r.error || '未知'));
-      } else if (msg.type === ACCOUNTS.SWITCH_TO && msg.payload) {
-        const email = String(msg.payload);
-        const acc = findBundleAccount(email);
-        if (isWeeklyQuotaFrozen(acc)) {
-          vscode.window.showWarningMessage('账号 ' + email + ' 已冻结：' + (getAccountFreezeReason(acc) || '不可切号'));
-          return;
-        }
-        const r = await sendBridgeRequest('localSwitchTo', { email });
-        if (r.ok) vscode.window.showInformationMessage('已请求切换到 ' + email + '，原版会重置指纹并重载窗口');
-        else vscode.window.showErrorMessage('切换失败：' + (r.error || '未知'));
-      } else if (msg.type === ACCOUNTS.VIEW_TOKEN && msg.payload) {
-        const acc = findBundleAccount(String(msg.payload));
-        if (!acc) { vscode.window.showWarningMessage('伴生桥未捕获该账号 token'); return; }
-        accountsOverviewPanel?.webview.postMessage({ type: ACCOUNTS.SHOW_TOKEN, payload: acc });
-        return;
-      } else if (msg.type === ACCOUNTS.COPY_TOKEN && msg.payload) {
-        const acc = findBundleAccount(String(msg.payload));
-        if (!acc || !acc.sessionToken) { vscode.window.showWarningMessage('该账号缺少 sessionToken'); return; }
-        await vscode.env.clipboard.writeText(acc.sessionToken);
-        vscode.window.setStatusBarMessage('已复制 ' + acc.email + ' 的 sessionToken', 2500);
-        return;
-      } else if (msg.type === ACCOUNTS.TOGGLE_FREEZE && msg.payload) {
-        const email = String(msg.payload).trim();
-        const key = email.toLowerCase();
-        const shared = readSharedState();
-        const map = Object.assign({}, shared.manualFrozenAccounts || {});
-        const frozen = !!map[key];
-        if (frozen) delete map[key];
-        else map[key] = { email, frozenAt: Date.now() };
-        await writeSharedState({ manualFrozenAccounts: map });
-        vscode.window.setStatusBarMessage((frozen ? '已取消冻结 ' : '已手动冻结 ') + email, 2000);
-      } else if (msg.type === ACCOUNTS.EXPORT_TOKENS) {
-        const r = await exportAllTokens(String(msg.payload || 'clipboard'));
-        if (r.ok) vscode.window.showInformationMessage(r.message);
-        else vscode.window.showErrorMessage('导出失败：' + r.error);
-        return;
-      } else if (msg.type === ACCOUNTS.TOAST && msg.payload) {
-        vscode.window.setStatusBarMessage(String(msg.payload), 1500);
-        return;
-      } else if (msg.type === ACCOUNTS.SMART_SWITCH) {
-        await fastSwitchBestAccount(context, { confirm: false });
-      }
-    } catch (e) {
-      vscode.window.showErrorMessage('账号总览操作失败：' + (e && e.message || e));
-    }
-    renderAccountsOverview(context);
-  });
-  renderAccountsOverview(context);
-}
+const { pickBestAccountByDaily } = require('./src/domain/accountSelector');
+const { createAccountsController } = require('./src/controllers/accountsController');
+const { createQuickActionsController } = require('./src/controllers/quickActionsController');
+const { createHealthController } = require('./src/controllers/healthController');
+const { createFastSwitchService } = require('./src/services/fastSwitchService');
 
 let panelProvider = null;
+let accountsController = null;
+let fastSwitchService = null;
+let quickActionsController = null;
+let healthController = null;
 let myInstanceId = '__plus__';
 
 async function runOriginalCommand(command) {
@@ -241,269 +89,11 @@ function promptInstallContinueSupport(context) {
   }, 1200);
 }
 
-function wait(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function runZenPostSwitchHooks(context, email) {
-  // Zen 切号成功后必做的衔接：让原版插件刷新登录态/账号池，刷新所有面板，避免积分识别和对话框失效。
-  try { await sendBridgeRequest('refreshAccounts'); } catch (e) { console.warn('[wfSwitchPlus] zen post refresh failed:', e && e.message); }
-  try { panelProvider?.refresh(); } catch {}
-  try { renderAccountsOverview(context); } catch {}
-  try { refreshDetailPanel(); } catch {}
-  if (email) {
-    try { await context.globalState.update('lastEmail', email); } catch {}
-  }
-}
-
-async function fastSwitchBestAccount(context, options = {}) {
-  const best = pickBestAccountByDaily();
-  if (!best) {
-    vscode.window.showWarningMessage('没有可快速切换的账号（伴生桥未捕获 bundle、全部账号无效或周额度已冻结）');
-    return { ok: false, error: 'no-account' };
-  }
-  if (!getAccountToken(best)) {
-    vscode.window.showWarningMessage('账号 ' + best.email + ' 缺少 sessionToken/apiKey，无法 Zen 快速切号');
-    return { ok: false, error: 'missing-token' };
-  }
-  const curEmail = (readSharedState().currentEmail) || context.globalState.get('lastEmail', '');
-  if (curEmail && String(curEmail).toLowerCase() === String(best.email).toLowerCase()) {
-    vscode.window.showInformationMessage('当前账号 ' + best.email + ' 已是日额度最高（' + best.daily + '%），无需快速切号');
-    return { ok: true, skipped: true };
-  }
-  if (options.confirm !== false) {
-    const pick = await vscode.window.showWarningMessage(
-      'Zen 自动切号：将直接调用 Windsurf loginWithAuthToken 注入 ' + best.email + '，不主动重载窗口。失败时可回退原版桥切号。',
-      { modal: true },
-      'Zen 切换',
-      '取消'
-    );
-    if (pick !== 'Zen 切换') return { ok: false, canceled: true };
-  }
-  const r = await fastSwitchToAccount(best);
-  if (r.ok) {
-    await writeSharedState({
-      currentEmail: best.email,
-      _wfLastSync: Date.now(),
-      fastSwitchLast: {
-        at: new Date().toISOString(),
-        email: best.email,
-        landed: !!r.landed,
-        currentUser: r.currentUser || '',
-      },
-    });
-    const msg = r.landed
-      ? 'Zen 切号已落地：' + best.email
-      : 'Zen 切号已发起：' + best.email + '（当前登录态：' + (r.currentUser || '未知') + '）';
-    vscode.window.showInformationMessage(msg);
-    await runZenPostSwitchHooks(context, best.email);
-    return r;
-  }
-  const cfg = vscode.workspace.getConfiguration('wfSwitchPlus');
-  if (cfg.get('fastSwitchFallbackToOriginal', true)) {
-    vscode.window.setStatusBarMessage('Zen 切号失败，回退原版桥：' + (r.error || '未知'), 3500);
-    const fallback = await sendBridgeRequest('localSwitchTo', { email: best.email });
-    if (fallback.ok) {
-      vscode.window.showInformationMessage('已回退原版桥切换到 ' + best.email);
-      await runZenPostSwitchHooks(context, best.email);
-    } else {
-      vscode.window.showErrorMessage('Zen 切号失败，原版桥回退也失败：' + (fallback.error || r.error || '未知'));
-    }
-    return Object.assign({ fallback }, r);
-  }
-  vscode.window.showErrorMessage('Zen 切号失败：' + (r.error || '未知'));
-  return r;
-}
-
-async function fastSwitchPickAccount(context) {
-  const accounts = getBundleAccounts().filter(a => a && a.email && a.valid !== false && getAccountToken(a) && !isWeeklyQuotaFrozen(a));
-  if (!accounts.length) {
-    vscode.window.showWarningMessage('没有可 Zen 切换的账号（需要 token，且周额度不能为 0）');
-    return { ok: false, error: 'no-token-account' };
-  }
-  const pick = await vscode.window.showQuickPick(accounts.map(a => ({
-    label: String(a.email),
-    description: '日 ' + (a.daily ?? '--') + '% · 周 ' + (a.weekly ?? '--') + '%',
-    account: a,
-  })), {
-    placeHolder: '选择要 Zen 切换的账号（不主动重载窗口）',
-    ignoreFocusOut: true,
-  });
-  if (!pick) return { ok: false, canceled: true };
-  const confirm = await vscode.window.showWarningMessage(
-    'Zen 切号：将直接调用 Windsurf loginWithAuthToken 注入 ' + pick.account.email + '。',
-    { modal: true },
-    'Zen 切换',
-    '取消'
-  );
-  if (confirm !== 'Zen 切换') return { ok: false, canceled: true };
-  const r = await fastSwitchToAccount(pick.account);
-  if (r.ok) {
-    await writeSharedState({
-      currentEmail: pick.account.email,
-      _wfLastSync: Date.now(),
-      fastSwitchLast: {
-        at: new Date().toISOString(),
-        email: pick.account.email,
-        landed: !!r.landed,
-        currentUser: r.currentUser || '',
-      },
-    });
-    vscode.window.showInformationMessage((r.landed ? 'Zen 切号已落地：' : 'Zen 切号已发起：') + pick.account.email);
-    await runZenPostSwitchHooks(context, pick.account.email);
-    return r;
-  }
-  vscode.window.showErrorMessage('Zen 切号失败：' + (r.error || '未知'));
-  return r;
-}
-
-async function fastSwitchAccountByEmail(context, email) {
-  const key = String(email || '').trim().toLowerCase();
-  const account = findBundleAccount(key) || getBundleAccounts().find(a => a && a.email && String(a.email).toLowerCase() === key);
-  if (!account) {
-    vscode.window.showWarningMessage('未找到账号：' + email);
-    return { ok: false, error: 'account-not-found' };
-  }
-  if (!getAccountToken(account)) {
-    vscode.window.showWarningMessage('账号 ' + account.email + ' 缺少 sessionToken/apiKey，无法 Zen 切号');
-    return { ok: false, error: 'missing-token' };
-  }
-  if (isWeeklyQuotaFrozen(account)) {
-    vscode.window.showWarningMessage('账号 ' + account.email + ' 已冻结：' + (getAccountFreezeReason(account) || '不可切号'));
-    return { ok: false, error: 'weekly-quota-frozen' };
-  }
-  const r = await fastSwitchToAccount(account);
-  if (r.ok) {
-    await writeSharedState({
-      currentEmail: account.email,
-      _wfLastSync: Date.now(),
-      fastSwitchLast: {
-        at: new Date().toISOString(),
-        email: account.email,
-        landed: !!r.landed,
-        currentUser: r.currentUser || '',
-      },
-    });
-    vscode.window.showInformationMessage((r.landed ? 'Zen 切号已落地：' : 'Zen 切号已发起：') + account.email);
-    await runZenPostSwitchHooks(context, account.email);
-    return r;
-  }
-  const cfg = vscode.workspace.getConfiguration('wfSwitchPlus');
-  if (cfg.get('fastSwitchFallbackToOriginal', true)) {
-    const fallback = await sendBridgeRequest('localSwitchTo', { email: account.email });
-    if (fallback.ok) {
-      vscode.window.showInformationMessage('Zen 失败，已回退原版桥切换到 ' + account.email);
-      await runZenPostSwitchHooks(context, account.email);
-    } else {
-      vscode.window.showErrorMessage('Zen 切号失败，原版桥回退也失败：' + (fallback.error || r.error || '未知'));
-    }
-    return Object.assign({ fallback }, r);
-  }
-  vscode.window.showErrorMessage('Zen 切号失败：' + (r.error || '未知'));
-  return r;
-}
-
-async function batchActivateCodes(codes) {
-  const list = Array.from(new Set((Array.isArray(codes) ? codes : String(codes || '').split(/[\s,，;；]+/))
-    .map(v => String(v || '').trim())
-    .filter(Boolean))).slice(0, 50);
-  if (!list.length) {
-    vscode.window.showWarningMessage('没有可提交的激活码');
-    return { ok: false, error: 'empty-codes' };
-  }
-  let ok = 0;
-  const failed = [];
-  for (const code of list) {
-    vscode.window.setStatusBarMessage('正在提交激活码 ' + (ok + failed.length + 1) + '/' + list.length, 2000);
-    const r = await sendBridgeRequest('activateCdk', { code });
-    if (r.ok) ok += 1;
-    else failed.push({ code, error: r.error || '未知' });
-  }
-  if (failed.length) {
-    const msg = '激活码提交完成：成功 ' + ok + '，失败 ' + failed.length + '。' + (failed[0].error || '');
-    vscode.window.showWarningMessage(msg, '重新注入桥').then(pick => {
-      if (pick === '重新注入桥') vscode.commands.executeCommand('wfSwitchPlus.injectOriginalBridge');
-    });
-  } else {
-    vscode.window.showInformationMessage('激活码批量提交完成：成功 ' + ok + ' 条');
-  }
-  return { ok: failed.length === 0, success: ok, failed };
-}
-
-async function openQuickActions(context) {
-  const items = [
-    { label: '$(zap) Zen 选择账号快切', description: '选择任意已捕获 token 的账号，不主动重载窗口', command: 'wfSwitchPlus.fastSwitchPick' },
-    { label: '$(rocket) 切到日额度最高账号', description: 'Zen 优先，失败回退原版桥', command: 'wfSwitchPlus.smartSwitch' },
-    { label: '$(sync) 刷新原版账号数据', description: '通过伴生桥调用原版 refreshAccounts', command: 'wfSwitchPlus.refreshAccountsViaBridge' },
-    { label: '$(account) 打开账号总览', description: '查看账号池、额度和 token 概览', command: 'wfSwitchPlus.openAccountsOverview' },
-    { label: '$(graph) 打开 Token 详情', description: '查看真实优先 token 面板', command: 'wfSwitchPlus.showTokenUsageStats' },
-    { label: '$(plug) 验证 Windsurf 桥状态', description: '检查主包桥和候选会话信息', command: 'wfSwitchPlus.verifyWindsurfBridge' },
-  ];
-  const pick = await vscode.window.showQuickPick(items, {
-    placeHolder: 'WF 增强快捷弹窗（自带，不依赖原版面板）',
-    ignoreFocusOut: true,
-  });
-  if (!pick) return;
-  await vscode.commands.executeCommand(pick.command);
-}
-
-async function runContinueHealthCheck(context, options = {}) {
-  try { startContinueHttpServer(context); } catch (e) { console.warn('[wfSwitchPlus] continue http init failed:', e && e.message); }
-  await wait(300);
-  let health = await checkContinueHealth();
-  if (health.ok) {
-    if (options.interactive !== false) {
-      const pick = await vscode.window.showInformationMessage('持续对话质检通过', '复制报告');
-      if (pick === '复制报告') await vscode.env.clipboard.writeText(formatContinueHealthReport(health));
-    }
-    return health;
-  }
-  const report = formatContinueHealthReport(health);
-  if (options.autoRepair) {
-    const r = await installContinueSupport(context);
-    await wait(500);
-    health = await checkContinueHealth();
-    if (options.interactive !== false) {
-      if (health.ok) vscode.window.showInformationMessage(`持续对话已自动修复，本地 HTTP 端口: ${r.port || health.port}`);
-      else vscode.window.showWarningMessage('自动修复后仍有异常：' + health.issues.join('；'));
-    }
-    return Object.assign(health, { repairResult: r });
-  }
-  if (options.interactive === false) return health;
-  const pick = await vscode.window.showWarningMessage('持续对话质检发现异常：' + health.issues.join('；'), '自动修复', '复制报告', '打开控制台');
-  if (pick === '自动修复') {
-    const r = await installContinueSupport(context);
-    await wait(500);
-    health = await checkContinueHealth();
-    if (health.ok) vscode.window.showInformationMessage(`持续对话已自动修复，本地 HTTP 端口: ${r.port || health.port}`);
-    else vscode.window.showWarningMessage('自动修复后仍有异常：' + health.issues.join('；'));
-  } else if (pick === '复制报告') {
-    await vscode.env.clipboard.writeText(report);
-    vscode.window.showInformationMessage('已复制持续对话质检报告');
-  } else if (pick === '打开控制台') {
-    try { await vscode.commands.executeCommand('wfSwitchPlus.panel.focus'); } catch { await vscode.commands.executeCommand('workbench.view.extension.wfSwitchPlusView'); }
-  }
-  return health;
-}
-
-async function promptContinueHealthIfBroken(context) {
-  const health = await runContinueHealthCheck(context, { interactive: false });
-  if (health.ok) return;
-  const now = Date.now();
-  const lastAt = Number(context.globalState.get('continueHealthPromptAt', 0) || 0);
-  if (now - lastAt < 30 * 60 * 1000) return;
-  await context.globalState.update('continueHealthPromptAt', now);
-  const pick = await vscode.window.showWarningMessage('持续对话可能已失效：' + health.issues.join('；'), '自动修复', '查看质检');
-  if (pick === '自动修复') await runContinueHealthCheck(context, { autoRepair: true, interactive: true });
-  else if (pick === '查看质检') await runContinueHealthCheck(context, { interactive: true });
-}
-
-let bridgeStatusCache = { installed: false, injected: false };
 function getPanelHtml() {
   const stats = readTokenUsageStatsSync();
   const cfg = vscode.workspace.getConfiguration('wfSwitchPlus');
-  const shared = readSharedState();
-  const bundleAccounts = (shared && shared.bundle && Array.isArray(shared.bundle.accounts)) ? shared.bundle.accounts : [];
+  const shared = buildEffectiveShared(readSharedState());
+  const bundleAccounts = getEffectiveAccounts(shared);
   return getPlusPanelHtml({
     stats,
     pricing: getPricingConfig(),
@@ -522,13 +112,32 @@ function getPanelHtml() {
 
 function getPanelLiveData() {
   const stats = readTokenUsageStatsSync();
-  const shared = readSharedState();
-  const bundleAccounts = (shared && shared.bundle && Array.isArray(shared.bundle.accounts)) ? shared.bundle.accounts : [];
+  const shared = buildEffectiveShared(readSharedState());
+  const bundleAccounts = getEffectiveAccounts(shared);
   return getPlusPanelLiveData({
     stats,
     pricing: getPricingConfig(),
     bundleAccounts,
   });
+}
+
+async function notifyStaleOriginalBridge(context, status) {
+  if (!status || !status.installed || !status.injected) return;
+  if (!status.currentBridgeMarker || status.bridgeMarker === status.currentBridgeMarker) return;
+  const key = 'originalBridgeStalePrompt:' + status.currentBridgeMarker;
+  if (context.globalState.get(key, false)) return;
+  await context.globalState.update(key, true);
+  const pick = await vscode.window.showWarningMessage(
+    '原版伴生桥版本过旧，星火导入账号可能被原版刷新覆盖。请重注入伴生桥并重载 Windsurf。',
+    '立即重注入',
+    '稍后'
+  );
+  if (pick === '立即重注入') {
+    const r = await originalBridge.injectBridge();
+    if (r.ok) vscode.window.showInformationMessage(r.alreadyInjected ? '原版伴生桥已是最新版本' : '已重注入原版伴生桥，请重载 Windsurf 生效');
+    else vscode.window.showErrorMessage('重注入失败：' + r.error);
+    await refreshBridgeStatus();
+  }
 }
 
 async function refreshBridgeStatus() {
@@ -604,12 +213,12 @@ class PlusPanelProvider {
       return;
     }
     if (msg.type === 'fastSwitchToEmail') {
-      await fastSwitchAccountByEmail(this.context, msg.email);
+      await fastSwitchService.switchByEmail(msg.email);
       this.refresh();
       return;
     }
     if (msg.type === 'batchActivateCodes') {
-      await batchActivateCodes(msg.codes);
+      await quickActionsController.batchActivateCodes(msg.codes);
       this.refresh();
       return;
     }
@@ -637,6 +246,22 @@ function activate(context) {
   console.log('[wfSwitchPlus] 扩展已激活');
   initContinueSupport({ getInstanceId: () => myInstanceId });
   panelProvider = new PlusPanelProvider(context);
+  fastSwitchService = createFastSwitchService({
+    context,
+    sendBridgeRequest,
+    refreshPanel: () => panelProvider?.refresh(),
+    refreshAccountsOverview: () => accountsController?.render(),
+    refreshDetailPanel,
+  });
+  quickActionsController = createQuickActionsController({ sendBridgeRequest });
+  accountsController = createAccountsController({
+    context,
+    getBridgeStatus: () => bridgeStatusCache,
+    sendBridgeRequest,
+    smartSwitch: (options) => fastSwitchService.switchBest(options),
+    switchTo: (email) => fastSwitchService.switchByEmail(email),
+  });
+  healthController = createHealthController({ context, installContinueSupport, startContinueHttpServer });
   setTokenRefreshHandler(() => panelProvider?.refresh());
   setTokenContext(context);
   // 启动时静默刷新一次官方模型价格表（解析 Windsurf 本地缓存，无网络请求）
@@ -673,7 +298,7 @@ function activate(context) {
       if (r.ok) vscode.window.showInformationMessage(`已安装持续对话支持，本地 HTTP 端口: ${r.port}`);
       else vscode.window.showErrorMessage(`安装持续对话支持失败: ${r.error}`);
     }),
-    vscode.commands.registerCommand('wfSwitchPlus.continueHealthCheck', () => runContinueHealthCheck(context, { interactive: true })),
+    vscode.commands.registerCommand('wfSwitchPlus.continueHealthCheck', () => healthController.runContinueHealthCheck({ interactive: true })),
     vscode.commands.registerCommand('wfSwitchPlus.configureContinueRules', async () => {
       const r = await configureWfContinueGlobalRules();
       if (r.ok) vscode.window.showInformationMessage(`已配置 WF 继续对话全局规则: ${r.file}`);
@@ -856,6 +481,7 @@ function activate(context) {
         const saved = await recordRealTokenUsage({
           cascadeId,
           offset,
+          accountEmail: readSharedState().currentEmail || context.globalState.get('lastEmail', ''),
           total: meta && meta.total || 0,
           entryCount: meta && meta.entryCount || 0,
           aggregatedByField: meta && meta.aggregatedByField || {},
@@ -901,18 +527,18 @@ function activate(context) {
       }
       await refreshBridgeStatus();
     }),
-    vscode.commands.registerCommand('wfSwitchPlus.openAccountsOverview', () => openAccountsOverview(context)),
+    vscode.commands.registerCommand('wfSwitchPlus.openAccountsOverview', () => accountsController.open()),
     vscode.commands.registerCommand('wfSwitchPlus.checkOriginalUpdate', () => runOriginalCommand('wfSwitch.checkUpdate')),
     vscode.commands.registerCommand('wfSwitchPlus.refreshAccountsViaBridge', async () => {
       const r = await sendBridgeRequest('refreshAccounts');
       if (r.ok) vscode.window.setStatusBarMessage('已请求原版刷新账号', 2000);
       else vscode.window.showWarningMessage('调用原版刷新失败：' + (r.error || '未知'));
-      renderAccountsOverview(context);
+      accountsController?.render();
     }),
-    vscode.commands.registerCommand('wfSwitchPlus.quickActions', () => openQuickActions(context)),
-    vscode.commands.registerCommand('wfSwitchPlus.smartSwitch', () => fastSwitchBestAccount(context)),
-    vscode.commands.registerCommand('wfSwitchPlus.fastSwitchBest', () => fastSwitchBestAccount(context)),
-    vscode.commands.registerCommand('wfSwitchPlus.fastSwitchPick', () => fastSwitchPickAccount(context)),
+    vscode.commands.registerCommand('wfSwitchPlus.quickActions', () => quickActionsController.openQuickActions()),
+    vscode.commands.registerCommand('wfSwitchPlus.smartSwitch', () => fastSwitchService.switchBest()),
+    vscode.commands.registerCommand('wfSwitchPlus.fastSwitchBest', () => fastSwitchService.switchBest()),
+    vscode.commands.registerCommand('wfSwitchPlus.fastSwitchPick', () => fastSwitchService.switchPick()),
     vscode.commands.registerCommand('wfSwitchPlus.focusOriginalPanel', async () => {
       try { await vscode.commands.executeCommand('wfSwitch.panel.focus'); }
       catch { try { await vscode.commands.executeCommand('workbench.view.extension.wfSwitchView'); } catch (e) { vscode.window.showWarningMessage('无法聚焦原版面板：' + (e && e.message || e)); } }
@@ -945,6 +571,7 @@ function activate(context) {
             await recordRealTokenUsage({
               cascadeId: r.cascadeId,
               offset: r.offset || 0,
+              accountEmail: readSharedState().currentEmail || context.globalState.get('lastEmail', ''),
               total: r.meta.total || 0,
               entryCount: r.meta.entryCount || 0,
               aggregatedByField: r.meta.aggregatedByField || {},
@@ -958,7 +585,7 @@ function activate(context) {
       if (sig !== lastSharedSig) {
         lastSharedSig = sig;
         panelProvider?.refresh();
-        if (accountsOverviewPanel) renderAccountsOverview(context);
+        if (accountsController?.hasPanel()) accountsController.render();
       }
       // 自动按日额度切号
       const cfg = vscode.workspace.getConfiguration('wfSwitchPlus');
@@ -966,7 +593,7 @@ function activate(context) {
       if (Date.now() - lastAutoSwitchAt < 5 * 60 * 1000) return; // 防抖 5 分钟
       const threshold = Math.max(1, Math.min(99, Number(cfg.get('autoQuotaThreshold', 15) || 15)));
       const curEmail = shared.currentEmail || context.globalState.get('lastEmail', '');
-      const curAcc = curEmail ? findBundleAccount(curEmail) : null;
+      const curAcc = curEmail ? findEffectiveAccount(curEmail) : null;
       if (!curAcc || curAcc.daily === undefined || curAcc.daily === null) return;
       if (Number(curAcc.daily) >= threshold) return;
       const best = pickBestAccountByDaily();
@@ -976,7 +603,7 @@ function activate(context) {
       lastAutoSwitchAt = Date.now();
       vscode.window.setStatusBarMessage('⚡ 当前 ' + curEmail + ' 日额度 ' + curAcc.daily + '% < ' + threshold + '%，自动切到 ' + best.email, 4000);
       try {
-        await fastSwitchBestAccount(context, { confirm: false });
+        await fastSwitchService.switchBest({ confirm: false });
       } catch (e) { console.warn('[wfSwitchPlus] auto switch failed:', e && e.message); }
     } catch {}
   }, 5000);
@@ -984,14 +611,22 @@ function activate(context) {
   installBuiltinContinuePs1().catch(() => {});
   try { startContinueHttpServer(context); } catch (e) { console.warn('[wfSwitchPlus] continue http init failed:', e.message); }
   promptInstallContinueSupport(context);
-  setTimeout(() => promptContinueHealthIfBroken(context).catch(e => console.warn('[wfSwitchPlus] continue health prompt failed:', e && e.message)), 20000);
-  const continueHealthTimer = setInterval(() => promptContinueHealthIfBroken(context).catch(() => {}), 5 * 60 * 1000);
+  setTimeout(() => healthController.promptContinueHealthIfBroken().catch(e => console.warn('[wfSwitchPlus] continue health prompt failed:', e && e.message)), 20000);
+  const continueHealthTimer = setInterval(() => healthController.promptContinueHealthIfBroken().catch(() => {}), 5 * 60 * 1000);
   context.subscriptions.push({ dispose: () => clearInterval(continueHealthTimer) });
   // 自动注入伴生桥：原版在但桥版本不一致或缺失时静默更新
   originalBridge.ensureBridgeAuto()
-    .then(r => { if (r && r.ok && !r.alreadyInjected && !r.skipped) vscode.window.setStatusBarMessage('已为原版插件注入伴生桥，重载后启用真实账号同步', 4000); })
+    .then(async r => {
+      if (r && r.ok && !r.alreadyInjected && !r.skipped) {
+        vscode.window.showWarningMessage('已为原版插件注入/升级伴生桥。请重载 Windsurf，让账号刷新与星火账号保护生效。', '重载窗口')
+          .then(pick => { if (pick === '重载窗口') vscode.commands.executeCommand('workbench.action.reloadWindow'); });
+      }
+    })
     .catch(e => console.warn('[wfSwitchPlus] bridge inject failed:', e && e.message))
-    .finally(() => refreshBridgeStatus());
+    .finally(async () => {
+      await refreshBridgeStatus();
+      await notifyStaleOriginalBridge(context, bridgeStatusCache);
+    });
 }
 
 function deactivate() {

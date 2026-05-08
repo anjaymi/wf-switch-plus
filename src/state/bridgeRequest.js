@@ -15,14 +15,13 @@ async function sendBridgeRequest(action, extra = {}) {
     try {
       if (fs.existsSync(BRIDGE_REPLY_FILE)) {
         const reply = JSON.parse(fs.readFileSync(BRIDGE_REPLY_FILE, 'utf8'));
-        if (reply && reply.action === action && reply.at && reply.at >= Number(requestId.split('-')[0]) - 100) {
-          return reply;
-        }
+        if (reply && reply.requestId === requestId) return reply;
+        if (reply && !reply.requestId && reply.action === action && reply.at && reply.at >= start - 100) return reply;
       }
     } catch (e) {}
     await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
   }
-  return { ok: false, action, error: '原版桥未应答（请确认伴生桥已注入并重载窗口）' };
+  return { ok: false, action, requestId, error: '原版桥未应答（请确认伴生桥已注入并重载窗口）' };
 }
 
 module.exports = { sendBridgeRequest };

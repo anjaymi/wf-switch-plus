@@ -5,7 +5,8 @@ const path = require('path');
 const { getTokenDetailHtml } = require('./tokenDetailHtml');
 const { detectCurrentModel, estimateModelCost, getModelInfo } = require('./modelCatalog');
 const { ACCOUNT_MGR_DIR } = require('./shared/paths');
-const { readSharedState: readSharedStateSync, writeSharedState } = require('./state/sharedState');
+const { readSharedState: readSharedStateSync, writeSharedState, buildEffectiveShared, getEffectiveAccounts } = require('./state/sharedState');
+const { buildTokenLiveUpdate } = require('./domain/tokenLiveUpdate');
 
 const TOKEN_USAGE_FILE = path.join(ACCOUNT_MGR_DIR, 'token-usage.json');
 const QUOTA_BASELINE_KEY = 'quotaBaselineV1';
@@ -208,11 +209,13 @@ async function recordRealTokenUsage(body = {}) {
   if (!total) return null;
   const cascadeId = String(body.cascadeId || '');
   const offset = Math.max(0, Number(body.offset || 0));
+  const accountKey = String(body.accountEmail || body.currentEmail || '').trim().toLowerCase();
+  const dedupeKey = [accountKey || 'unknown-account', cascadeId || 'unknown-cascade'].join('::');
   const stats = readTokenUsageStatsSync();
   stats.realOffsets = stats.realOffsets && typeof stats.realOffsets === 'object' ? stats.realOffsets : {};
   let delta = total;
   if (cascadeId) {
-    const prev = stats.realOffsets[cascadeId];
+    const prev = stats.realOffsets[dedupeKey] || stats.realOffsets[cascadeId];
     if (prev && Number(prev.offset || 0) === offset) {
       const prevTotal = Math.max(0, Number(prev.total || 0));
       if (total <= prevTotal) return null;
@@ -223,6 +226,7 @@ async function recordRealTokenUsage(body = {}) {
     at: new Date().toISOString(),
     cascadeId,
     offset,
+    accountEmail: accountKey,
     total: delta,
     rawTotal: total,
     entryCount: Math.max(0, Number(body.entryCount || 0)),
@@ -231,7 +235,8 @@ async function recordRealTokenUsage(body = {}) {
     auto: !!body.auto,
   };
   if (cascadeId) {
-    stats.realOffsets[cascadeId] = { offset, total, at: item.at };
+    stats.realOffsets[dedupeKey] = { offset, total, accountEmail: accountKey, at: item.at };
+    if (stats.realOffsets[cascadeId] && dedupeKey !== cascadeId) delete stats.realOffsets[cascadeId];
   }
   stats.totalRealTokens = Math.max(0, Number(stats.totalRealTokens || 0)) + delta;
   stats.realSamples = Math.max(0, Number(stats.realSamples || 0)) + 1;
@@ -263,10 +268,11 @@ function renderDetail() {
   const stats = readTokenUsageStatsSync();
   const pricing = getPricingConfig();
   const localBaselines = extContext ? getQuotaBaselines(extContext) : {};
-  const shared = readSharedStateSync();
+  const rawShared = readSharedStateSync();
+  const shared = buildEffectiveShared(rawShared);
   const baselines = Object.assign({}, shared.baselines || {}, localBaselines);
   const currentEmail = shared.currentEmail || (extContext && extContext.globalState.get('lastEmail', '')) || '';
-  const bundleAccounts = (shared && shared.bundle && Array.isArray(shared.bundle.accounts)) ? shared.bundle.accounts : [];
+  const bundleAccounts = getEffectiveAccounts(rawShared);
   const modelState = getCurrentModelState(stats, pricing);
   detailPanel.webview.html = getTokenDetailHtml({ stats, pricing, baselines, currentEmail, bundleAccounts, modelState });
 }
@@ -280,76 +286,18 @@ async function showTokenUsageStats() {
     try {
       if (msg.type === 'requestRefresh') {
         try {
-          const _s = readTokenUsageStatsSync();
-          const _p = getPricingConfig();
-          const _shared = readSharedStateSync();
-          const _bAccs = (_shared && _shared.bundle && Array.isArray(_shared.bundle.accounts)) ? _shared.bundle.accounts.filter(a=>a&&a.email) : [];
-          const _curEmail = _shared.currentEmail || (extContext && extContext.globalState.get('lastEmail', '')) || '';
-          const _curKey = String(_curEmail || '').toLowerCase();
-          const _curAcc = _bAccs.find(a => a && a.email && String(a.email).toLowerCase() === _curKey) || {};
-          const _dq = _p.dailyQuotaTokens || 1;
-          const _dVals = _bAccs.map(a=>a.daily).filter(v=>v!==undefined&&v!==null&&!Number.isNaN(Number(v))).map(Number);
-          const _wVals = _bAccs.map(a=>a.weekly).filter(v=>v!==undefined&&v!==null&&!Number.isNaN(Number(v))).map(Number);
-          const _avg = _dVals.length ? _dVals.reduce((s,v)=>s+v,0)/_dVals.length : null;
-          const _avgW = _wVals.length ? _wVals.reduce((s,v)=>s+v,0)/_wVals.length : null;
-          const _usedR = _avg===null ? 0 : Math.max(0,1-_avg/100);
-          const _aggUsd = _usedR*(_p.dailyQuotaUsd||0)*_bAccs.length;
-          const _aggTok = _usedR*_dq*_bAccs.length;
-          const _localTokens = (_s.totalRealTokens || _s.totalEstimatedTokens || 0);
-          const _modelState = getCurrentModelState(_s, _p);
-          const _localCost = _modelState && _modelState.costKnown ? (_modelState.estimatedCost || 0) : _localTokens*_p.blendedPer1M/1e6;
-          const _best = _bAccs.reduce((best, cur) => {
-            const bd = best && best.daily !== undefined ? Number(best.daily) : -1;
-            const cd = cur && cur.daily !== undefined ? Number(cur.daily) : -1;
-            return cd > bd ? cur : best;
-          }, null);
-          const _avgReq = _s.totalRequests ? Math.round((_s.totalEstimatedTokens||0) / _s.totalRequests) : 0;
-          const _last = _s.last || null;
-          const _hasReal = !!(_s.totalRealTokens || 0);
-          const _realItems = Array.isArray(_s.recentReal) ? _s.recentReal.filter(r => r && Number(r.total) > 0) : [];
-          const _obsTotal = _hasReal ? (_s.totalRealTokens || 0) : (_s.totalEstimatedTokens || 0);
-          const _obsCount = _hasReal ? (_s.realSamples || _realItems.length || 0) : (_s.totalRequests || 0);
-          const _obsAvg = _hasReal && _obsCount ? Math.round(_obsTotal / _obsCount) : _avgReq;
-          const _obsLast = _hasReal ? (_s.lastReal || _realItems[0] || null) : _last;
-          const _obsLastTokens = _obsLast ? (_hasReal ? Number(_obsLast.total || 0) : Number(_obsLast.estimatedTokens || 0)) : 0;
-          detailPanel.webview.postMessage({
-            type:'liveUpdate',
-            heroTotalCost: _localCost+_aggUsd,
-            heroTotalTokens: _localTokens+_aggTok,
-            aggregateDailyUsd: _aggUsd,
-            aggregateDailyTokens: _aggTok,
-            localCost: _localCost,
-            localTokens: _localTokens,
-            hasRealTokens: !!(_s.totalRealTokens || 0),
-            realSamples: _s.realSamples || 0,
-            accountCount: _bAccs.length,
-            validAccountCount: _bAccs.filter(a => a.valid !== false).length,
-            avgDaily: _avg===null?null:Math.round(_avg),
-            avgWeekly: _avgW===null?null:Math.round(_avgW),
-            poolDailyUsed: _avg===null?0:Math.max(0,100-Math.round(_avg)),
-            poolWeeklyUsed: _avgW===null?0:Math.max(0,100-Math.round(_avgW)),
-            currentEmail: _curEmail,
-            currentDaily: _curAcc && _curAcc.daily!==undefined ? Number(_curAcc.daily) : null,
-            currentWeekly: _curAcc && _curAcc.weekly!==undefined ? Number(_curAcc.weekly) : null,
-            bestEmail: _best && _best.email || '',
-            bestDaily: _best && _best.daily!==undefined ? Number(_best.daily) : null,
-            requests: _s.totalRequests||0,
-            savedTokens: _s.totalSavedTokens||0,
-            avgTokens: _avgReq,
-            lastTokens: _last ? (_last.estimatedTokens||0) : 0,
-            lastDetailsTokens: _last ? (_last.detailsTokens||0) : 0,
-            highRiskCount: _s.highRiskCount||0,
-            obsHasReal: _hasReal,
-            obsTotal: _obsTotal,
-            obsCount: _obsCount,
-            obsAvg: _obsAvg,
-            obsLastTokens: _obsLastTokens,
-            obsLastSub: _obsLast ? (_hasReal ? 'raw ' + (_obsLast.rawTotal || _obsLast.total || 0) + '  样本 ' + (_s.realSamples || 0) + ' 条' : 'details ' + (_obsLast.detailsTokens || 0) + '  高风险 ' + (_s.highRiskCount || 0) + ' 次') : '暂无记录',
-            obsRisk: _hasReal ? '真实样本' : (_last ? ({ low: '低风险', medium: '中风险', high: '高风险' }[_last.riskLevel] || '未知') : '无数据'),
-            obsRiskColor: _hasReal ? '#22c55e' : (_last ? ({ low: '#22c55e', medium: '#f59e0b', high: '#ef4444' }[_last.riskLevel] || '#94a3b8') : '#94a3b8'),
-            obsRiskSub: _hasReal ? '当前显示真实 Token 消耗样本' : (_last && _last.riskReasons && _last.riskReasons.length ? _last.riskReasons.join('，') : '当前上下文较轻'),
-            model: _modelState,
-          });
+          const stats = readTokenUsageStatsSync();
+          const pricing = getPricingConfig();
+          const rawShared = readSharedStateSync();
+          const currentEmail = rawShared.currentEmail || (extContext && extContext.globalState.get('lastEmail', '')) || '';
+          const modelState = getCurrentModelState(stats, pricing);
+          detailPanel.webview.postMessage(buildTokenLiveUpdate({
+            stats,
+            pricing,
+            shared: { accounts: getEffectiveAccounts(rawShared) },
+            currentEmail,
+            modelState,
+          }));
         } catch {}
         return;
       } else if (msg.type === 'setManualModel') {

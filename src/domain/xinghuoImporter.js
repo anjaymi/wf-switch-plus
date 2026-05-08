@@ -88,20 +88,36 @@ function readXinghuoAccounts() {
   return { accounts, sources };
 }
 
+function normalizeImportedAccount(account) {
+  return Object.assign({}, account, {
+    source: account.source || 'xinghuo',
+    imported: true,
+  });
+}
+
 function mergeAccounts(existingAccounts, importedAccounts) {
+  const importedKeys = new Set((Array.isArray(importedAccounts) ? importedAccounts : [])
+    .filter(a => a && a.email)
+    .map(a => String(a.email).toLowerCase()));
   const map = new Map();
   for (const account of Array.isArray(existingAccounts) ? existingAccounts : []) {
     if (!account || !account.email) continue;
-    map.set(String(account.email).toLowerCase(), account);
+    const key = String(account.email).toLowerCase();
+    map.set(key, importedKeys.has(key) ? Object.assign({}, account, { source: account.source || 'original' }) : account);
   }
   let added = 0;
   let updated = 0;
-  for (const account of importedAccounts) {
-    if (!account || !account.email) continue;
+  for (const rawAccount of Array.isArray(importedAccounts) ? importedAccounts : []) {
+    if (!rawAccount || !rawAccount.email) continue;
+    const account = normalizeImportedAccount(rawAccount);
     const key = String(account.email).toLowerCase();
     if (map.has(key)) updated++;
     else added++;
-    map.set(key, Object.assign({}, map.get(key) || {}, account));
+    const prev = map.get(key) || {};
+    map.set(key, Object.assign({}, prev, account, {
+      source: prev.email ? (prev.source === account.source ? account.source : 'merged') : account.source,
+      imported: true,
+    }));
   }
   return { accounts: Array.from(map.values()), added, updated };
 }
